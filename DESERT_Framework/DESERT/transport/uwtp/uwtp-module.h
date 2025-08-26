@@ -507,6 +507,8 @@ protected:
 
 	int nack_rx_count; /**< Count the number of NACK packets received. */
 
+	int cum_ack_parameter;		//intervallo di pacchetti ogni quanto inviare un ack cumulativo
+
 	int destPort_; /**< Destination port number. */
 
 	int seq_no_counter; /**< This variable is used to generate the sequence

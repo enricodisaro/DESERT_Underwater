@@ -54,7 +54,7 @@
 #   +--------------------------+   +--------------------------+   +-------------+------------+
 #   |  7. UW/CBR               |   |  7. UW/CBR               |   |  7. UW/CBR  | UW/CBR     |
 #   +--------------------------+   +--------------------------+   +-------------+------------+
-#   |  6. UW/UDP               |   |  6. UW/UDP               |   |  6. UW/UDP               |
+#   |  6. UW/TP                |   |  6. UW/TP                |   |  6. UW/TP                |
 #   +--------------------------+   +--------------------------+   +--------------------------+
 #   |  5. UW/STATICROUTING     |   |  5. UW/STATICROUTING     |   |  5. UW/STATICROUTING     |
 #   +--------------------------+   +--------------------------+   +--------------------------+
@@ -74,7 +74,7 @@
 # Flags to enable or disable options #
 ######################################
 set opt(trace_files)        0
-set opt(bash_parameters)    0
+set opt(bash_parameters)    1
 
 #####################
 # Library Loading   #
@@ -110,7 +110,7 @@ $ns use-Miracle
 ##################
 set opt(nn)                 2.0 ;# Number of Nodes
 set opt(starttime)          1
-set opt(stoptime)           10000
+set opt(stoptime)           100
 set opt(txduration)         [expr $opt(stoptime) - $opt(starttime)]
 
 set opt(maxinterval_)       20.0
@@ -123,10 +123,19 @@ set opt(txpower)            150.0
 set opt(propagation_speed)  1500;# m/s
 set opt(rngstream)	        1
 set opt(pktsize)            125
-set opt(cbr_period)         60
+set opt(cbr_period)         15
+set opt(cumulative)         1;           #number of cumulatively acked packets
 
 if {$opt(bash_parameters)} {
-    if {$argc != 4} {
+
+    if {$argc == 4} {
+        set opt(cumulative) [lindex $argv 0]
+        set opt(stoptime) [lindex $argv 1]
+        set opt(txduration)         [expr $opt(stoptime) - $opt(starttime)]
+        set opt(cbr_period) [lindex $argv 2]
+        set opt(cum_ACK_param) [lindex $argv 3]
+
+    } elseif {$argc != 4} {
         puts "The script requires three inputs:"
         puts "- the first one is the cbr packet size (byte);"
         puts "- the second one is the cbr poisson period (seconds);"
@@ -181,11 +190,12 @@ Module/UW/CBR set debug_      0
 
 Module/UW/TP set debug_      1
 Module/UW/TP set send_buffer_size_      1000
-Module/UW/TP set receive_buffer_size_	 100
-Module/UW/TP set delay_interval_	 5
-Module/UW/TP set nack_retx_time_	 1
+Module/UW/TP set receive_buffer_size_	 500
+Module/UW/TP set delay_interval_	 3
+Module/UW/TP set nack_retx_time_	 2
 Module/UW/TP set pkt_delete_time_from_queue_	 1000
 Module/UW/TP set expected_ACK_threshold_ 0.5
+Module/UW/TP set cum_ACK_param_         $opt(cum_ACK_param)
 
 ### Channel ###
 MPropagation/Underwater set practicalSpreading_ 1.75
@@ -290,6 +300,12 @@ proc createNode { id } {
     
     $phy($id) setSpectralMask $data_mask
     $phy($id) setInterference $interf_data($id)
+
+    if {$opt(cumulative) == 1} {
+        $udp($id) setCumAckMode
+    } else {
+        $udp($id) setNoCumAckMode
+    }
 }
 
 proc createSink { } {
@@ -340,7 +356,12 @@ proc createSink { } {
 
 	$udp_sink node_id $opt(nn)
 	$udp_sink setAckMode
-	$udp_sink setCumAckMode
+
+    if {$opt(cumulative) == 1} {
+        $udp_sink setCumAckMode
+    } else {
+        $udp_sink setNoCumAckMode
+    }
 
     $ipif_sink addr 254
 
@@ -479,11 +500,11 @@ proc finish {} {
     puts "Packet Delivery Ratio    : [expr $sum_cbr_rcv_pkts / $sum_cbr_sent_pkts * 100]"
     # puts "IP Pkt Header Size       : $ipheadersize"
     #puts "UDP Header Size          : $udpheadersize"
-    puts "UDP SINK TX ACK Count         : [$udp_sink getAckTxCount]"
-    puts "UDP SINK TX NACK Count        : [$udp_sink getNAckTxCount]"
+    puts "UWTP SINK TX ACK Count         : [$udp_sink getAckTxCount]"
+    puts "UWTP SINK TX NACK Count        : [$udp_sink getNAckTxCount]"
 	for {set i 0} {$i < $opt(nn)} {incr i} {
-		puts "UDP($i) RX ACK Count         : [$udp($i) getAckRxCount]"
-    	puts "UDP($i) RX NACK Count        : [$udp($i) getNAckRxCount]"
+		puts "UWTP($i) RX ACK Count         : [$udp($i) getAckRxCount]"
+    	puts "UWTP($i) RX NACK Count        : [$udp($i) getNAckRxCount]"
 	}
     #puts "CBR Header Size          : $cbrheadersize"
   
