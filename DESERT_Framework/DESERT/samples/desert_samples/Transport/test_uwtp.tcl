@@ -189,13 +189,14 @@ Module/UW/CBR set PoissonTraffic_      1
 Module/UW/CBR set debug_      0
 
 Module/UW/TP set debug_      1
-Module/UW/TP set send_buffer_size_      1000
+Module/UW/TP set send_buffer_size_      50
 Module/UW/TP set receive_buffer_size_	 500
-Module/UW/TP set delay_interval_	 3
-Module/UW/TP set nack_retx_time_	 2
+Module/UW/TP set delay_interval_	 2
+Module/UW/TP set nack_retx_time_	 4
 Module/UW/TP set pkt_delete_time_from_queue_	 1000
 Module/UW/TP set expected_ACK_threshold_ 0.5
 Module/UW/TP set cum_ACK_param_         $opt(cum_ACK_param)
+Module/UW/TP set nack_retx_limit_   4;          #max number of times a nack can be retransmitted
 
 ### Channel ###
 MPropagation/Underwater set practicalSpreading_ 1.75

@@ -94,7 +94,8 @@ UWTP::UWTP()
 	bind("pkt_delete_time_from_queue_", (double *) &pkt_delete_time_from_queue);
 	bind("expected_ACK_threshold_", (double *) &expected_ACK_threshold);
 	bind("cum_ACK_param_", (int *) &cum_ack_parameter);
-	cout << "PARAMETRI\n" << send_buffer_size << " " << receive_buffer_size << ", ack param = " << cum_ack_parameter << endl;
+	bind("nack_retx_limit_", (int *) &nack_retx_limit);
+	cout << "PARAMETRI\n" << send_buffer_size << " " << receive_buffer_size << ", ack param = " << cum_ack_parameter << endl << "\nnack retx limit: " << nack_retx_limit << endl;
 }
 
 UWTP::~UWTP()
@@ -282,8 +283,8 @@ void
 UWTP::sendNack()
 {
 
-	if (debug_) cout << "\n\n-------- sendNACK ---------" << endl;
-		//cout << TIME << " UWTP::sendNack(" << node_id << "), seding Nack "
+	if (debug_) cout << "\n\n===========================\n" << TIME << "   -------- sendNACK ---------" << endl;
+		//cout << TIME << " UWTP::sendNack(" << node_id << "), sending Nack "
 		//	 << endl;
 
 	if (debug_) {
@@ -298,36 +299,85 @@ UWTP::sendNack()
 		}
 	}
 
-	nack_tx_count++;
+
+	//before doing anything, clean nacks that cant be retxed
+	//need to make another cycle because I didnt wanna risk undefined behaviour in the previous one when removing iterators
+	for (map<UWTPPair, NackPktStoreInfo *>::iterator it_nb =
+					nackBuffer.begin();
+			it_nb != nackBuffer.end();
+			){
+		if(it_nb->second->getRetxNum() >= nack_retx_limit){	//if the nack has reached the max number of retransmissions
+			map<UWTPPair, NackPktStoreInfo *>::iterator toErase = it_nb;
+
+			int seq_no = (it_nb->first).second;
+			int dport_no = (it_nb->first).first;
+			int sender_id = it_nb->second->getSenderId();
+			if(debug_) cout << "\n\n\n\n+++++++++++++++++++++++++\nLimit of retransmissions for NACK port:" << dport_no << ", sn:" << seq_no << " was reached.\nStop trying" << endl;
+
+
+			++it_nb;
+			nackBuffer.erase(toErase);	//remove the nack from the buffer
+
+			map<PortNo, ExpectedPktSeqNo>::iterator it_e = expPktInfo.find(dport_no);
+			it_e->second += 1;			//update the next expected sequence number, like if the packet was received
+
+			checkReceiveQueue(dport_no, sender_id);	
+			
+
+		}
+		else{
+			++it_nb;
+		}
+	}
+
+	
 
 	//this part is necessary because the user does not need to specify a nack to send, but
 	//just issues the send of a nack, if there is one in the queue
 	if (nackBuffer.size() != 0) {
+		
 		for (map<UWTPPair, NackPktStoreInfo *>::iterator it_nb =
 						nackBuffer.begin();
 				it_nb != nackBuffer.end();
 				it_nb++) {			//iterate over all packets in the buffer
+
 			if (it_nb->second->getNackTxInfo() == FALSE) {  //if the packet has not been transmitted yet
+
 				it_nb->second->setNackTxInfo(TRUE);  		//flag it as transmitted
 				it_nb->second->setNackTxTime(TIME);			//set the time of transmission
 				Packet *nack_p = (it_nb->second->getNackPnt())->copy();
+				it_nb->second->countRetx();
+				nack_tx_count++;
 				sendDown(nack_p);
+				
 			} else if (it_nb->second->getNackTxInfo() == TRUE &&
 					it_nb->second->getTimeSpentInNackBuffer() >
 							nack_retx_time) {				//else if the packet has been flagged for transmission
 															//and the time needed to retransmission has passed
 				it_nb->second->setNackTxTime(TIME);			//update the time	
+				
+				it_nb->second->countRetx();
 				Packet *nack_p = (it_nb->second->getNackPnt())->copy();
+				nack_tx_count++;
 				sendDown(nack_p);							//resend the packet
+				
+
 			} else {
 				// do nothing
 			}
 		}
+
 	}
 
 
 	//if after the procedure there are still nacks in the buffer
 	if (nackBuffer.size() != 0) {
+
+		/* I honestly dont think this does anything useful 
+		because if there is something in the buffer we will eventually need to send it 
+		or it will be removed anyway
+
+
 		int count;
 		for (map<UWTPPair, NackPktStoreInfo *>::iterator it_nb =
 						nackBuffer.begin();
@@ -341,9 +391,18 @@ UWTP::sendNack()
 									//which means we could have counted them in the previous section??
 		}
 
-		if (count > 0) {										//if before we did something
-			delay_timer_.resched(JITTER * delay_interval);		//idk reschedule the timer for the future or smth
+		if (count >= 0) {										//if before we did something
+			//delay_timer_.resched(JITTER * delay_interval);		//idk reschedule the timer for the future or smth
+			delay_timer_.resched(delay_interval);
+			if(debug_) cout << "there is stuff: reschedule" << endl;
 		}
+		*/
+
+		delay_timer_.resched(delay_interval);
+		if(debug_) cout << "there is stuff: reschedule" << endl;
+	}
+	else {
+		if(debug_) cout << "nothing to send" << endl;
 	}
 }
 
@@ -534,7 +593,8 @@ UWTP::recvData(Packet *p, int id)
 		} else {	//if the received packet's sequence number is too big (out of order for the future)
 			if(debug_) cout << "SEQUENCE NUMBER TOO BIG" << endl;
 			if (nackBuffer.size() == 0) {	//if there is nothing in the nack buffer
-				delay_timer_.resched(JITTER * delay_interval);	//schedule the timer for the future
+				//delay_timer_.resched(JITTER * delay_interval);	//schedule the timer for the future
+				delay_timer_.resched(delay_interval);
 			}
 
 			for (int i = it_e->second; i < seq_no; i++) {		//iterate from i = expected sequence number
@@ -554,6 +614,7 @@ UWTP::recvData(Packet *p, int id)
 					nack_store_info = new NackPktStoreInfo;	//NEW = check for memory leaks??
 					nack_store_info->setNackPnt(nack_pkt);
 					nack_store_info->setNackTxInfo(FALSE);
+					nack_store_info->setSenderId(id);
 					nackBuffer.insert(
 							make_pair(make_pair(dport_no, i), nack_store_info));
 				}
@@ -700,7 +761,7 @@ UWTP::recvNack(Packet *p)
 	map<UWTPPair, UWTPPktStoreInfo *>::iterator it_p = sendBuffer.find(
 			make_pair(uwtpnah->getSport(), uwtpnah->getSeqNo()));		//find the NACKed packet in the buffer
 
-	if (it_p == sendBuffer.end()) {
+	if (it_p == sendBuffer.end()) { //2222
 		cout << "The packet cant be retxed because it's not in the buffer anymore. Abort" << endl;
 		return;
 	}
@@ -716,7 +777,7 @@ UWTP::recvNack(Packet *p)
 
 
 
-
+	//3333
 	//versione migliorata con un pezzo di codice copiato da recvACK
 	//il nack funge anche da ACK cumulativo, indipendentemente dalla modalita' di trasmissione
 	//in quanto il numero del nack indica che tutti i pacchetti precedenti a quello sono ricevuti correttamente
@@ -858,7 +919,7 @@ UWTP::recv(Packet *p, int idSrc)
 								highest_waiting_time) {
 							highest_waiting_time =
 									it_p->second->getTimeSpentInQueue();
-							//port_ = uwtpdh->getDport(); 		//wtf why would you save the port and the 
+							//port_ = uwtpdh->getDport(); 		//wtf why would you save the port and the 1111
 							//sno_ = ch->uid();					//id of the packet to send instead of the old one
 							port_ = it_p->first.first;
 							sno_ = it_p->first.second;

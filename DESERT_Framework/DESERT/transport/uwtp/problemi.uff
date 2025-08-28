@@ -1,27 +1,48 @@
 PROBLEMI:
 - se il sendbuffer e' pieno, l'erase fallisce perche' il codice provava a rimuovere il pacchetto appena arrivato 
-  invece che quello piu' vecchio lol  (fixed)
+  invece che quello piu' vecchio lol  (fixed) 1111
 
 - recvNack parte dal presupposto che il pacchetto nacked sia nel buffer. Cosa non vera visto che il buffer non e' infinito
-  oppure puo capitare che il nack arrivi dopo che il pacchetto e' gia' stato precedentemente ackato (fixed)
+  oppure puo capitare che il nack arrivi dopo che il pacchetto e' gia' stato precedentemente ackato (fixed) 2222
 
 - onestamente inviare il NACK dopo un delay non mi sembra troppo una buona idea perche in una simulazione ha causato il mai ricevere un ACK e la conseguente perdita di un
   sacco di pacchetti
   
-  Idea: appena viene ricevuto un pacchetto nackato, inviare un ACK cumulativo (nah pero forse basterebbe aumentare la frequenza degli ack)
+  Idea: appena viene ricevuto un pacchetto nackato, inviare un ACK cumulativo (nah pero forse basterebbe aumentare la frequenza degli ack) gia fixato dopo
 
 - se un pacchetto non viene ricevuto correttamente e non e' possibile ritrasmetterlo, non ricevero' mai piu'
   alcun pacchetto perche' saranno tutti fuori ordine??
 
 - il sistema con acks per packet non cancella i pacchetti vecchi se l'ack viene perso, quindi il send buffer e' destinato a riempirsi eventualmente
-  secondo me è meglio usare ack cumulativi con parametro deterministico 1 invece che la strategia per packet
+  secondo me è meglio usare ack cumulativi con parametro deterministico 1 invece che la strategia per packet (fixed)
 
 - la ricezione di un NACK viene trattata solo come una cosa negativa da ritrasmettere, ma non considera il fatto che per forza anche tutti i pacchetti
-  precedenti a quello nackato sono stato ricevuti (fixed) (questa cosa fixa anche il problema precedente)
+  precedenti a quello nackato sono stato ricevuti (fixed) (questa cosa fixa anche il problema precedente) 3333
 
 - ho scoperto perche la simulazione con ack cumulativo e con ack singolo dava gli stessi risultati: sono dumb 
   (nel tcl il sender aveva sempre cum ack)
 
+- c'era un problema nel conto dei nack inviati dal sink (il counter era incrementato ogni volta che la funzione era chiamata, ma non 
+  ogni volta che veniva effettivamente inviato un nack) (fixed)
+
+
+--- aggiunto il sistema che limita il numero di ritrasmissioni di un nack
+--- aggiunto il sistema che invia un ack ogni tot pacchetti non nackati consecutivi (non ancora fatto)
 
 
 - nuova idea per il confronto: taglia degli ack cumulativi vs dimensione del buffer
+
+
+- accetta max numero di invio nack
+varia topologia
+bitrate
+numero di nodi
+vento variabile (condizioni fisiche)
+
+metriche:
+throughput
+pdr
+e2e delay
+
+
+confronto con udp

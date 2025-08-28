@@ -215,6 +215,7 @@ public:
 	NackPktStoreInfo()
 		: nack_tx_time(0.0)
 		, nack_tx(FALSE)
+		, retx_num(0)
 	{
 	}
 
@@ -295,6 +296,31 @@ public:
 		return nack_tx;
 	}
 
+
+	int
+	getRetxNum()
+	{
+		return retx_num;
+	}
+
+	//add a retransmission to the counter
+	void
+	countRetx()
+	{
+		retx_num += 1;
+	}
+
+	int
+	getSenderId()
+	{
+		return sender_id;
+	}
+
+	void setSenderId(int id){
+		sender_id = id;
+	}
+
+
 protected:
 	double nack_tx_time; /**< When the NACK packet is stored, this variable is
 						  *used to keep track of the period storing of this NACK
@@ -315,6 +341,10 @@ protected:
 				   *means, packet is already transmitted, if FALSE, packet is
 				   *not yet transmitted.
 				   */
+	int retx_num;	//saves the number of retransmissions of this nack
+
+	int sender_id;			//id of the sender of the expected packet. Need to save it
+					//in case the limit of retx is reached 
 };
 
 extern packet_t PT_UWTP;
@@ -536,6 +566,9 @@ protected:
 									*initialized, otherwise no ACK will be sent
 									*for the receive packet.
 									*/
+
+	int nack_retx_limit;		//max number of retransmission a nack can be retransmitted
+								//before the receiver stops trying
 
 	UWTP_delayTimer delay_timer_; /**< This is the object of UWTP_delayTimer. */
 
