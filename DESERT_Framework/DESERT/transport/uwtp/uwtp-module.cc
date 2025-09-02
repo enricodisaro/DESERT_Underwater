@@ -81,6 +81,7 @@ UWTP::UWTP()
 	, destPort_(0)
 	, seq_no_counter(-1)
 	, ack_tx_mode(WITHOUT_CUM_ACK)
+	, lost_pck_count(0)
 {
 	if (portcounter != 0)
 		portcounter = 0;
@@ -140,6 +141,9 @@ UWTP::command(int argc, const char *const *argv)
 		} else if (strcasecmp(argv[1], "setNoCumAckMode") == 0) {
 			ack_tx_mode = WITHOUT_CUM_ACK;
 			return TCL_OK;
+		} else if (strcasecmp(argv[1], "getLostPcks") == 0) {
+			tcl.resultf("%d", lost_pck_count);
+			return TCL_OK;
 		}
 	}
 
@@ -150,6 +154,11 @@ UWTP::command(int argc, const char *const *argv)
 				return TCL_ERROR;
 			int port = assignPort(m);
 			tcl.resultf("%d", port);
+
+			//init the map for ack transmission
+
+			successes.insert(make_pair(port, 0));
+
 			return TCL_OK;
 		} else if (strcasecmp(argv[1], "node_id") == 0) {
 			node_id_ = atoi(argv[2]);
@@ -322,7 +331,7 @@ UWTP::sendNack()
 			it_e->second += 1;			//update the next expected sequence number, like if the packet was received
 
 			checkReceiveQueue(dport_no, sender_id);	
-			
+			++lost_pck_count;
 
 		}
 		else{
@@ -349,6 +358,7 @@ UWTP::sendNack()
 				it_nb->second->countRetx();
 				nack_tx_count++;
 				sendDown(nack_p);
+				if(debug_) cout << "sent port:" << (it_nb->first).first << ", SN:" << (it_nb->first).second << endl;
 				
 			} else if (it_nb->second->getNackTxInfo() == TRUE &&
 					it_nb->second->getTimeSpentInNackBuffer() >
@@ -360,7 +370,7 @@ UWTP::sendNack()
 				Packet *nack_p = (it_nb->second->getNackPnt())->copy();
 				nack_tx_count++;
 				sendDown(nack_p);							//resend the packet
-				
+				if(debug_) cout << "sent port:" << (it_nb->first).first << ", SN:" << (it_nb->first).second << endl;
 
 			} else {
 				// do nothing
@@ -458,6 +468,37 @@ UWTP::checkReceiveQueue(int port, int id)
 		else ++it_r;
 	}
 	if(debug_) cout << "Packets removed from the receive queue: " << removed << endl;
+
+
+	//it is necessary to create a nack for the next missing packet, if needed
+	//because otherwise nacks are triggered only upon reception of the next wrong packet, which
+	//messes up the reliability of the protocol if the CBR stops
+
+	int expected_sn = it_e->second;
+
+	for (map<UWTPPair, Packet *>::iterator it_r = receiveBuffer.begin();
+			it_r != receiveBuffer.end();
+			++it_r) {
+		if((it_r->first).first == port &&		//if the port number is correct
+				(it_r->first).second > expected_sn) {		//but the sequence number is too big
+
+			//it means that there are still missing packets for this port
+			//so we need to send a nack
+			Packet *nack_pkt = Packet::alloc();		//create the nack packet
+			initNackPkt(it_r->second, nack_pkt, expected_sn);		//pass a random packet from the correct sender
+			nack_store_info = new NackPktStoreInfo;	//NEW = check for memory leaks??
+			nack_store_info->setNackPnt(nack_pkt);
+			nack_store_info->setNackTxInfo(FALSE);
+			nack_store_info->setSenderId(id);
+			nackBuffer.insert(make_pair(make_pair(port, expected_sn), nack_store_info));
+
+			if(debug_) cout << "\nthere are still packets missing. Add " << it_e->second << " to the nack buffer" << endl;
+			
+			break;
+		}
+	}
+
+
 }
 
 void
@@ -536,6 +577,13 @@ UWTP::recvData(Packet *p, int id)
 	}
 
 	map<PortNo, ExpectedPktSeqNo>::iterator it_e = expPktInfo.find(dport_no);
+	if (it_e == expPktInfo.end()) {			//the previous version is flawed if the first packets are lost
+											
+		expPktInfo.insert(make_pair(dport_no, 0));		//create the entry with 0
+		if(debug_) cout << "\n\n\n SN CREATO PER LA PORTA \n\n\n" << endl;
+		it_e = expPktInfo.find(dport_no);
+
+	}
 
 	if (ack_mode == WITH_ACK && ack_tx_mode == WITHOUT_CUM_ACK) { //if there are per-packet ACKs
 		Packet *ack_pkt = Packet::alloc();
@@ -543,127 +591,137 @@ UWTP::recvData(Packet *p, int id)
 		sendAck(ack_pkt);						//create and send the ACK for the received packet
 	}
 
-	if (it_e == expPktInfo.end()) {			//if there is no entry in the map for dport_no
+/*	if (it_e == expPktInfo.end()) {			//if there is no entry in the map for dport_no
 											//I guess this should happen only for the first received packet
 		sendUp(id, p);
 		expPktInfo.insert(make_pair(dport_no, seq_no + 1));		//create the entry with the next seq_no
 		map<PortNo, ExpectedPktSeqNo>::iterator it_e =
 				expPktInfo.find(dport_no);
 	} else {								//if there already is an entry
+*/
+	if (it_e == expPktInfo.end()) {			//the previous version is flawed if the first packets are lost
+											
+		expPktInfo.insert(make_pair(dport_no, 0));		//create the entry with 0
+		if(debug_) cout << "\n\n\n SN CREATO PER LA PORTA \n\n\n" << endl;
+
+	}
+
+	if (it_e->second > seq_no) {		//if the sequence number of the entry is bigger than the one of the packet
+										//which means the received packet is too old
+		if (debug_)
+			cout << TIME
+					<< "\n\n\nA packet is received with lower sequence number than "
+					"expected one \n\n\n"
+					<< endl;
+		drop(p, 1, "LTESN"); // Less than expected sequence number = drop the packet
+		return;
+
+		
+	} else if (it_e->second == seq_no) {	//if the sequence number is the expected one
+		cmh->size() -= uwtpdh->size();
+		Packet *rcvPkt = p->copy();
+		sendUp(id, p);						//send the packet up
+		//map<PortNo, ExpectedPktSeqNo>::iterator it_e =
+		//		expPktInfo.find(dport_no);
+		it_e->second += 1;			//update the next expected sequence number
+
+		checkReceiveQueue(dport_no, id);	//check if in the buffer we have out of order packets
+											//that can now be delivered in order
+
+		if (ack_mode == WITH_ACK && ack_tx_mode == WITH_CUM_ACK) {	//if we are using cumulative ACKs
+
+			successes.find(dport_no)->second += 1;
+			//WEIRD THING OF PROTOCOL IS HERE
+			//if (expected_ACK_threshold < RNV) {	//confront the value with a random value
+			//if (expPktInfo.find(dport_no)->second % cum_ack_parameter == 0) { //deterministic approach
+			if (successes.find(dport_no)->second % cum_ack_parameter == 0) {  //approach with consecutive successes
+				Packet *ack_pkt = Packet::alloc();		//create the ACK packet
+				map<PortNo, ExpectedPktSeqNo>::iterator it_e =
+						expPktInfo.find(dport_no); 		//find the next sequence number
+				hdr_uwtp_data *udh = HDR_UWTP_DATA(rcvPkt);
+				initAckPkt(rcvPkt, ack_pkt, (it_e->second) - 1);
+				if (debug_) cout << cum_ack_parameter << " successes in a row! Send the ack" << endl;
+				sendAck(ack_pkt);						//send the cumulative ACK
+			}
+		}
+		return;	//end of the if for the correct sequence number
 
 
-		if (it_e->second > seq_no) {		//if the sequence number of the entry is bigger than the one of the packet
-											//which means the received packet is too old
-			if (debug_)
-				cout << TIME
-					 << "\n\n\nA packet is received with lower sequence number than "
-						"expected one \n\n\n"
-					 << endl;
-			drop(p, 1, "LTESN"); // Less than expected sequence number = drop the packet
-			return;
+	} else {	//if the received packet's sequence number is too big (out of order for the future)
+		if(debug_) cout << "SEQUENCE NUMBER TOO BIG" << endl;
+		successes.find(dport_no)->second = 0; 		//reset the consecutive successes to 0
+		if (nackBuffer.size() == 0) {	//if there is nothing in the nack buffer
+			//delay_timer_.resched(JITTER * delay_interval);	//schedule the timer for the future
+			delay_timer_.resched(delay_interval);
+		}
 
-			
-		} else if (it_e->second == seq_no) {	//if the sequence number is the expected one
-			cmh->size() -= uwtpdh->size();
-			Packet *rcvPkt = p->copy();
-			sendUp(id, p);						//send the packet up
-			//map<PortNo, ExpectedPktSeqNo>::iterator it_e =
-			//		expPktInfo.find(dport_no);
-			it_e->second += 1;			//update the next expected sequence number
+		for (int i = it_e->second; i < seq_no; i++) {		//iterate from i = expected sequence number
+															//to the received sequence number (excluded)
+			map<UWTPPair, Packet *>::iterator it_rb =
+					receiveBuffer.find(make_pair(dport_no, i));		//find if packet with seq_no equal to i 
+																	//is already in the buffer
+			map<UWTPPair, NackPktStoreInfo *>::iterator it_nb =
+					nackBuffer.find(make_pair(dport_no, it_e->second));	//check if there is also the nack
 
-			checkReceiveQueue(dport_no, id);	//check if in the buffer we have out of order packets
-												//that can now be delivered in order
 
-			if (ack_mode == WITH_ACK && ack_tx_mode == WITH_CUM_ACK) {	//if we are using cumulative ACKs
+			if (it_rb == receiveBuffer.end() && it_nb == nackBuffer.end()) {
+				//if there is no such packet and no such nack
 
-				//WEIRD THING OF PROTOCOL IS HERE
-				//if (expected_ACK_threshold < RNV) {	//confront the value with a random value
-				if (expPktInfo.find(dport_no)->second % cum_ack_parameter == 0) {
-					Packet *ack_pkt = Packet::alloc();		//create the ACK packet
+				Packet *nack_pkt = Packet::alloc();		//create the nack packet
+				initNackPkt(p, nack_pkt, i);			
+				nack_store_info = new NackPktStoreInfo;	//NEW = check for memory leaks??
+				nack_store_info->setNackPnt(nack_pkt);
+				nack_store_info->setNackTxInfo(FALSE);
+				nack_store_info->setSenderId(id);
+				nackBuffer.insert(
+						make_pair(make_pair(dport_no, i), nack_store_info));
+			}
+		}//end of for
+
+		map<UWTPPair, Packet *>::iterator it_r =
+				receiveBuffer.find(make_pair(dport_no, seq_no)); //check if we already received this packet
+
+		if (it_r == receiveBuffer.end()) {		//if we received it for the first time
+
+			if (receiveBuffer.size() >= receive_buffer_size) { //if the buffer is full
+				int lowest_seq_no = MAX_PORT_NO;				//why use MAX_PORT_NO bah
+				for (map<UWTPPair, Packet *>::iterator it_rc =
+								receiveBuffer.begin();
+						it_r != receiveBuffer.end();
+						it_r++) {						//iterate over the receive buffer
+					if ((it_rc->first).first == dport_no &&
+							(it_rc->first).second < lowest_seq_no) {
+						lowest_seq_no = (it_rc->first).second;		//look for the lowest sequence number
+																	//for a packet for this port
+					}
+				}
+
+				map<UWTPPair, Packet *>::iterator it_r1 =
+						receiveBuffer.find(
+								make_pair(dport_no, lowest_seq_no));	//pick the packet with the found
+																		//lowest sequence number
+				if (it_r1 != receiveBuffer.end()) {						//if it exists, then
 					map<PortNo, ExpectedPktSeqNo>::iterator it_e =
-							expPktInfo.find(dport_no); 		//find the next sequence number
-					hdr_uwtp_data *udh = HDR_UWTP_DATA(rcvPkt);
-					initAckPkt(rcvPkt, ack_pkt, (it_e->second) - 1);
-					sendAck(ack_pkt);						//send the cumulative ACK
+							expPktInfo.find(dport_no);			//find the expected sequence number for this port
+					it_e->second = lowest_seq_no;				//update it with the lowest we have available in the
+																//receive buffer
+					checkReceiveQueue(dport_no, id);			//try to empty the receive buffer since it's full
 				}
-			}
-			return;	//end of the if for the correct sequence number
+				if(debug_) cout << "\n\n\nADDING TO THE BUFFER" << endl;
+				receiveBuffer.insert(
+						make_pair(make_pair(dport_no, seq_no), p));//put the new packet in the buffer
 
 
-		} else {	//if the received packet's sequence number is too big (out of order for the future)
-			if(debug_) cout << "SEQUENCE NUMBER TOO BIG" << endl;
-			if (nackBuffer.size() == 0) {	//if there is nothing in the nack buffer
-				//delay_timer_.resched(JITTER * delay_interval);	//schedule the timer for the future
-				delay_timer_.resched(delay_interval);
-			}
+			} else { //if the buffer is not full
+				if(debug_) cout << "\n\n\nADDING TO THE BUFFER" << endl;
 
-			for (int i = it_e->second; i < seq_no; i++) {		//iterate from i = expected sequence number
-																//to the received sequence number (excluded)
-				map<UWTPPair, Packet *>::iterator it_rb =
-						receiveBuffer.find(make_pair(dport_no, i));		//find if packet with seq_no equal to i 
-																		//is already in the buffer
-				map<UWTPPair, NackPktStoreInfo *>::iterator it_nb =
-						nackBuffer.find(make_pair(dport_no, it_e->second));	//check if there is also the nack
+				receiveBuffer.insert(						//just insert the new packet
+						make_pair(make_pair(dport_no, seq_no), p));
+			}	//code here can be formatted better
 
-
-				if (it_rb == receiveBuffer.end() && it_nb == nackBuffer.end()) {
-					//if there is no such packet and no such nack
-
-					Packet *nack_pkt = Packet::alloc();		//create the nack packet
-					initNackPkt(p, nack_pkt, i);			
-					nack_store_info = new NackPktStoreInfo;	//NEW = check for memory leaks??
-					nack_store_info->setNackPnt(nack_pkt);
-					nack_store_info->setNackTxInfo(FALSE);
-					nack_store_info->setSenderId(id);
-					nackBuffer.insert(
-							make_pair(make_pair(dport_no, i), nack_store_info));
-				}
-			}//end of for
-
-			map<UWTPPair, Packet *>::iterator it_r =
-					receiveBuffer.find(make_pair(dport_no, seq_no)); //check if we already received this packet
-
-			if (it_r == receiveBuffer.end()) {		//if we received it for the first time
-
-				if (receiveBuffer.size() >= receive_buffer_size) { //if the buffer is full
-					int lowest_seq_no = MAX_PORT_NO;				//why use MAX_PORT_NO bah
-					for (map<UWTPPair, Packet *>::iterator it_rc =
-									receiveBuffer.begin();
-							it_r != receiveBuffer.end();
-							it_r++) {						//iterate over the receive buffer
-						if ((it_rc->first).first == dport_no &&
-								(it_rc->first).second < lowest_seq_no) {
-							lowest_seq_no = (it_rc->first).second;		//look for the lowest sequence number
-																		//for a packet for this port
-						}
-					}
-
-					map<UWTPPair, Packet *>::iterator it_r1 =
-							receiveBuffer.find(
-									make_pair(dport_no, lowest_seq_no));	//pick the packet with the found
-																			//lowest sequence number
-					if (it_r1 != receiveBuffer.end()) {						//if it exists, then
-						map<PortNo, ExpectedPktSeqNo>::iterator it_e =
-								expPktInfo.find(dport_no);			//find the expected sequence number for this port
-						it_e->second = lowest_seq_no;				//update it with the lowest we have available in the
-																	//receive buffer
-						checkReceiveQueue(dport_no, id);			//try to empty the receive buffer since it's full
-					}
-					cout << "\n\n\nADDING TO THE BUFFER" << endl;
-					receiveBuffer.insert(
-							make_pair(make_pair(dport_no, seq_no), p));//put the new packet in the buffer
-
-
-				} else { //if the buffer is not full
-					cout << "\n\n\nADDING TO THE BUFFER" << endl;
-
-					receiveBuffer.insert(						//just insert the new packet
-							make_pair(make_pair(dport_no, seq_no), p));
-				}	//code here can be formatted better
-
-			} //end of "if received for the first time"
-		}//end of "if the packet seq_no is too big"
-	}//end of "if we already know the expected sequence number"
+		} //end of "if received for the first time"
+	}//end of "if the packet seq_no is too big"
+	//}//end of "if we already know the expected sequence number"
 
 
 	if (sendBuffer.size() > 0) {	//if we have something to send
@@ -751,7 +809,7 @@ UWTP::recvNack(Packet *p)
 
 	if(debug_) cout << uwtpnah->getSport() << ", " << uwtpnah->getSeqNo() << endl;
 	if(debug_) cout << "sendbuffer size is " << sendBuffer.size() << endl;
-	for (map<UWTPPair, UWTPPktStoreInfo *>::iterator it_p =
+	if(debug_) for (map<UWTPPair, UWTPPktStoreInfo *>::iterator it_p =
 									sendBuffer.begin();
 							it_p != sendBuffer.end();
 							it_p++){
@@ -762,7 +820,7 @@ UWTP::recvNack(Packet *p)
 			make_pair(uwtpnah->getSport(), uwtpnah->getSeqNo()));		//find the NACKed packet in the buffer
 
 	if (it_p == sendBuffer.end()) { //2222
-		cout << "The packet cant be retxed because it's not in the buffer anymore. Abort" << endl;
+		if(debug_) cout << "The packet cant be retxed because it's not in the buffer anymore. Abort" << endl;
 		return;
 	}
 	Packet *curr_data_pkt = (it_p->second->getPktPnt())->copy();
@@ -907,7 +965,7 @@ UWTP::recv(Packet *p, int idSrc)
 					}
 
 				} else {	//if the buffer is full
-					cout << "\nIL BUFFER E PIENO" << endl;
+					if(debug_) cout << "\nIL BUFFER E PIENO" << endl;
 					double highest_waiting_time = 0;	//find the oldest packet in the buffer
 					int port_, sno_;
 					map<UWTPPair, UWTPPktStoreInfo *>::iterator toErase = sendBuffer.begin();
@@ -924,16 +982,18 @@ UWTP::recv(Packet *p, int idSrc)
 							port_ = it_p->first.first;
 							sno_ = it_p->first.second;
 							toErase = it_p;
-							cout << toErase->first.first << ", " << toErase->first.second << endl;
+							if(debug_) cout << toErase->first.first << ", " << toErase->first.second << endl;
 						}
 					}
 					assert(port_ >= 0 && sno_ >= 0);
-					cout << "we are removing port: " << port_ << ", sno: " << sno_ << endl;
-					cout << toErase->first.first << ", " << toErase->first.second << endl;
-					cout << "dimensione del buffer: " << sendBuffer.size() << endl;
+					if(debug_) {
+						cout << "we are removing port: " << port_ << ", sno: " << sno_ << endl;
+						cout << toErase->first.first << ", " << toErase->first.second << endl;
+						cout << "dimensione del buffer: " << sendBuffer.size() << endl;
+					}
 					//sendBuffer.erase(make_pair(port_, sno_));	//remove the oldest packet to make some space
 					sendBuffer.erase(toErase);
-					cout << "dimensione del buffer dopo la rimozione: " << sendBuffer.size() << endl;
+					//cout << "dimensione del buffer dopo la rimozione: " << sendBuffer.size() << endl;
 					pkt_store_info = new UWTPPktStoreInfo;
 					pkt_store_info->setPktStoreTime(TIME);
 					pkt_store_info->setPktPnt(p);

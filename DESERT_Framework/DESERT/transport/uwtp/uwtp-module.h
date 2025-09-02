@@ -537,6 +537,8 @@ protected:
 
 	int nack_rx_count; /**< Count the number of NACK packets received. */
 
+	int lost_pck_count; //number of actually lost packets
+
 	int cum_ack_parameter;		//intervallo di pacchetti ogni quanto inviare un ack cumulativo
 
 	int destPort_; /**< Destination port number. */
@@ -569,6 +571,10 @@ protected:
 
 	int nack_retx_limit;		//max number of retransmission a nack can be retransmitted
 								//before the receiver stops trying
+
+	map<int, int> successes;	//map <port, #of consecutive successes>
+								//needed to implement the approach where an ack is sent after cum_ack_parameter
+								//consecutive successes
 
 	UWTP_delayTimer delay_timer_; /**< This is the object of UWTP_delayTimer. */
 

@@ -108,7 +108,7 @@ $ns use-Miracle
 ##################
 # Tcl variables  #
 ##################
-set opt(nn)                 2.0 ;# Number of Nodes
+set opt(nn)                 4.0 ;# Number of Nodes
 set opt(starttime)          1
 set opt(stoptime)           10000
 set opt(txduration)         [expr $opt(stoptime) - $opt(starttime)]
@@ -186,15 +186,15 @@ Module/UW/CBR set period_              $opt(cbr_period)
 Module/UW/CBR set PoissonTraffic_      1
 Module/UW/CBR set debug_      0
 
-Module/UW/TP set debug_      0
-Module/UW/TP set send_buffer_size_      50
-Module/UW/TP set receive_buffer_size_	 500
-Module/UW/TP set delay_interval_	 3
-Module/UW/TP set nack_retx_time_	 5
+Module/UW/TP set debug_      1
+Module/UW/TP set send_buffer_size_      3000
+Module/UW/TP set receive_buffer_size_	 5000
+Module/UW/TP set delay_interval_	 1
+Module/UW/TP set nack_retx_time_	 3
 Module/UW/TP set pkt_delete_time_from_queue_	 1000
 Module/UW/TP set expected_ACK_threshold_ 0.5
 Module/UW/TP set cum_ACK_param_         $opt(cum_ACK_param)
-Module/UW/TP set nack_retx_limit_   4;          #max number of times a nack can be retransmitted
+Module/UW/TP set nack_retx_limit_   100;          #max number of times a nack can be retransmitted
 
 ### Channel ###
 MPropagation/Underwater set practicalSpreading_ 1.75
@@ -279,8 +279,8 @@ proc createNode { id } {
     $node($id) addPosition $position($id)
     
     #Setup positions
-    $position($id) setX_ [expr 100 * $id]
-    $position($id) setY_ [expr 100 * $id]
+    $position($id) setX_ [expr 120 * $id -180]
+    $position($id) setY_ [expr 120 * $id -180]
     $position($id) setZ_ -1000
 
 	puts "Position($id) ([$position($id) getX_], [$position($id) getY_], [$position($id) getZ_])"
@@ -374,8 +374,8 @@ proc createSink { } {
     $node_sink addPosition $position_sink
     
     #Setup positions
-	$position_sink setX_ [expr 100 * $opt(nn)]
-	$position_sink setY_ [expr 100 * $opt(nn)]
+	$position_sink setX_ 0
+	$position_sink setY_ 0
 	$position_sink setZ_ -1000
 	puts "Position_sink ([$position_sink getX_], [$position_sink getY_], [$position_sink getZ_])"
 
@@ -446,7 +446,7 @@ for {set id1 0} {$id1 < $opt(nn)} {incr id1}  {
 # e.g., 
 for {set id1 0} {$id1 < $opt(nn)} {incr id1}  {
     $ns at $opt(starttime)    "$cbr($id1) start"
-    $ns at $opt(stoptime)     "$cbr($id1) stop"
+    $ns at [expr $opt(stoptime)]     "$cbr($id1) stop"
 }
 
 ###################
@@ -470,6 +470,8 @@ proc finish {} {
     puts "tx frequency     : $opt(freq) Hz"
     puts "tx bandwidth     : $opt(bw) Hz"
     puts "bitrate          : $opt(bitrate) bps"
+    puts "cumulative ACKS  : $opt(cumulative)"
+    puts "cumulative param : $opt(cum_ACK_param)"
     puts "---------------------------------------------------------------------"
 
     set sum_cbr_throughput     0
@@ -509,6 +511,9 @@ proc finish {} {
     	puts "UWTP($i) RX NACK Count        : [$udp($i) getNackRxCount]"
 	}
     #puts "CBR Header Size          : $cbrheadersize"
+    puts "---"
+    puts "Lost packets:                  : [$udp_sink getLostPcks]"
+    puts "[expr $sum_cbr_rcv_pkts / $sum_cbr_sent_pkts * 100], $opt(cbr_period), $opt(cumulative), $opt(cum_ACK_param)"
   
     $ns flush-trace
     close $opt(tracefile)
@@ -517,5 +522,5 @@ proc finish {} {
 ###################
 # start simulation
 ###################
-$ns at [expr $opt(stoptime) + 250.0]  "finish; $ns halt" 
+$ns at [expr $opt(stoptime) + 2500.0]  "finish; $ns halt" 
 $ns run

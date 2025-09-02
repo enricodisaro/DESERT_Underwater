@@ -1,5 +1,5 @@
 PROBLEMI:
-- se il sendbuffer e' pieno, l'erase fallisce perche' il codice provava a rimuovere il pacchetto appena arrivato 
+- se il   buffer e' pieno, l'erase fallisce perche' il codice provava a rimuovere il pacchetto appena arrivato 
   invece che quello piu' vecchio lol  (fixed) 1111
 
 - recvNack parte dal presupposto che il pacchetto nacked sia nel buffer. Cosa non vera visto che il buffer non e' infinito
@@ -18,6 +18,7 @@ PROBLEMI:
 
 - la ricezione di un NACK viene trattata solo come una cosa negativa da ritrasmettere, ma non considera il fatto che per forza anche tutti i pacchetti
   precedenti a quello nackato sono stato ricevuti (fixed) (questa cosa fixa anche il problema precedente) 3333
+  - tip: ora la modalita senza ack funziona bene comunque perche ci sono gli nack cumulativi
 
 - ho scoperto perche la simulazione con ack cumulativo e con ack singolo dava gli stessi risultati: sono dumb 
   (nel tcl il sender aveva sempre cum ack)
@@ -27,13 +28,13 @@ PROBLEMI:
 
 
 --- aggiunto il sistema che limita il numero di ritrasmissioni di un nack
---- aggiunto il sistema che invia un ack ogni tot pacchetti non nackati consecutivi (non ancora fatto)
+--- aggiunto il sistema che invia un ack ogni tot pacchetti non nackati consecutivi
 
 
 - nuova idea per il confronto: taglia degli ack cumulativi vs dimensione del buffer
 
 
-- accetta max numero di invio nack
+- accetta max numero di invio nack (fatto)
 varia topologia
 bitrate
 numero di nodi
@@ -46,3 +47,16 @@ e2e delay
 
 
 confronto con udp
+
+il file di simulazione tdma e utile perche invece che mettere un sink ha nodi che comunicano tra loro
+
+
+
+
+cosa che ho notato: in caso di buffer limitato con canale bad, e' molto meglio l'approccio per packet perche libera il buffer e permette piu ritrasmissioni
+idea: mostrare nel paper il fatto che il protocollo e' molto versatile e riesce quindi a funzionare in molti contesti
+
+
+
+massive flaw: se i primi x pacchetti vengono persi: suca, perche' viene messo come sequence number iniziale il number
+del primo pacchetto che viene ricevuto
