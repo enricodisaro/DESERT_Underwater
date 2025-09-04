@@ -87,6 +87,24 @@ protected:
 	virtual void expire(Event *e);
 };
 
+
+//timer needed to retransmit packets in absence of acks
+class UWTP_resendTimer : public TimerHandler
+{
+
+public:
+	UWTP_resendTimer(UWTP *m)
+	{
+		module = m;
+	}
+
+protected:
+	UWTP *module;
+	virtual void expire(Event *e);
+};
+
+
+
 /**
  *UWTPPktStoreInfo class is used to store the packet in the buffer with some
  *related information.
@@ -400,7 +418,7 @@ public:
 	 *@param id of the node
 	 *@param Sequence_number of the packet
 	 */
-	virtual void initPkt(Packet *p, int id, int seq_no_counter);
+	virtual void initPkt(Packet *p, int id);
 
 	/**
 	 *Initializing the ACK packet. Here, an ACK packet is associated with a
@@ -431,6 +449,14 @@ public:
 	 *not yet receive after certain time
 	 */
 	virtual void sendNack();
+
+
+	/**
+	 * Resend the first packet in the buffer that is old enough
+	 * to be used only in absence of ack reception for a long time
+	 */
+	virtual void resendPkt();
+
 
 	/**
 	 *Receives the data packet. It sends an ACK packet when acknowledge mode is
@@ -509,12 +535,12 @@ public:
 	virtual int command(int argc, const char *const *argv);
 
 	inline void
-	setId(int id_)
+	setNodeId(int id_)
 	{
 		node_id_ = id_;
 	}
 	inline int
-	getId()
+	getNodeId()
 	{
 		return node_id_;
 	}
@@ -543,8 +569,11 @@ protected:
 
 	int destPort_; /**< Destination port number. */
 
-	int seq_no_counter; /**< This variable is used to generate the sequence
-						   number of the data packet. */
+	//int seq_no_counter; /**< This variable is used to generate the sequence
+						   //number of the data packet. */
+
+	map<int, int> SN_map;		//map that saves the sequence number to be sent to a destination
+								//<destination_port, SN>
 
 	double nack_retx_time; /**< When NACK will be retransmitted again in case of
 							*NACK packet loss, which results in no
@@ -576,7 +605,11 @@ protected:
 								//needed to implement the approach where an ack is sent after cum_ack_parameter
 								//consecutive successes
 
+	double resend_time;			//time that needs to pass for the automatic restransmission of a packet
+
 	UWTP_delayTimer delay_timer_; /**< This is the object of UWTP_delayTimer. */
+
+	UWTP_resendTimer resend_timer_;
 
 	ACK_MODE ack_mode; /**< Sets the acknowledgement mode of the UWTP protocol.
 						*/
@@ -622,6 +655,9 @@ protected:
 
 	map<int, int>
 			id_map; /**< Container to keep the id. value = id;    key = port */
+
+	map<int, int> dest_ports;	//maps that saves the destination ports for each application
+								//<destinationID, port>
 
 	virtual int getUWTPDataHSize(); /**< This function is used to get the header
 									 * size of the data packet which can be used

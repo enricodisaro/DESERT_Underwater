@@ -88,7 +88,6 @@ load libUwmStdPhyBpskTracer.so
 load libuwphy_clmsgs.so
 load libuwstats_utilities.so
 load libuwphysical.so
-load libuwtp.so
 
 #############################
 # NS-Miracle initialization #
@@ -102,8 +101,7 @@ $ns use-Miracle
 ##################
 set opt(nn)                 3 ;# Number of Nodes
 set opt(starttime)          1	
-set opt(stoptime)           50
-set opt(extratime)          0
+set opt(stoptime)           36000
 set opt(txduration)         [expr $opt(stoptime) - $opt(starttime)] ;# Duration of the simulation
 set opt(txpower)            160.5;#158.263 ;#Power transmitted in dB re uPa 185.8 is the maximum
 set opt(propagation_speed) 1500;# m/s
@@ -115,9 +113,6 @@ set opt(bitrate)            20768.0 ;#150000;#bitrate in bps
 set opt(cbr_period)     10
 set opt(pktsize)	1250
 set opt(rngstream)	1
-
-set opt(cum_ACK_param)      6
-set opt(cumulative)         1
 
 if {$opt(bash_parameters)} {
 	if {$argc != 3} {
@@ -203,19 +198,6 @@ Module/UW/PHYSICAL  set BandwidthOptimization_      0
 Module/UW/PHYSICAL  set SPLOptimization_            0
 Module/UW/PHYSICAL  set debug_                      0
 
-
-### UWTP ###
-Module/UW/TP set debug_      1
-Module/UW/TP set send_buffer_size_      3000
-Module/UW/TP set receive_buffer_size_	 5000
-Module/UW/TP set delay_interval_	 1
-Module/UW/TP set nack_retx_time_	 3
-Module/UW/TP set pkt_delete_time_from_queue_	 1000
-Module/UW/TP set expected_ACK_threshold_ 0.5
-Module/UW/TP set cum_ACK_param_         $opt(cum_ACK_param)
-Module/UW/TP set nack_retx_limit_   3;          #max number of times a nack can be retransmitted
-Module/UW/TP set resend_time_       20;           #time to pass before automatic retransmission
-
 ################################
 # Procedure(s) to create nodes #
 ################################
@@ -229,8 +211,7 @@ proc createNode { id } {
         if { $id == $cnt} { continue }
 		set cbr($id,$cnt)  [new Module/UW/CBR] 
 	}
-    #set udp($id)  [new Module/UW/UDP]
-    set udp($id)  [new Module/UW/TP]
+    set udp($id)  [new Module/UW/UDP]
     set ipr($id)  [new Module/UW/StaticRouting]
     set ipif($id) [new Module/UW/IP]
     set mll($id)  [new Module/UW/MLL] 
@@ -242,7 +223,7 @@ proc createNode { id } {
         $node($id) addModule 7 $cbr($id,$cnt)   1  "CBR"
     }
 
-    $node($id) addModule 6 $udp($id)   1  "UWTP"
+    $node($id) addModule 6 $udp($id)   1  "UDP"
     $node($id) addModule 5 $ipr($id)   1  "IPR"
     $node($id) addModule 4 $ipif($id)  1  "IPF"   
     $node($id) addModule 3 $mll($id)   1  "MLL"
@@ -252,10 +233,7 @@ proc createNode { id } {
     for {set cnt 0} {$cnt < $opt(nn)} {incr cnt} {
         if { $id == $cnt} { continue }
         $node($id) setConnection $cbr($id,$cnt)   $udp($id)   0
-
-        set portnum($id,$cnt) [$udp($id) assignPort $cbr($id,$cnt)]
-        puts "TCL here, the source port for node $id linking to $cnt is:"
-        puts $portnum($id,$cnt)
+        set portnum($id,$cnt) [$udp($id) assignPort $cbr($id,$cnt) ]
     }
     $node($id) setConnection $udp($id)   $ipr($id)   1
     $node($id) setConnection $ipr($id)   $ipif($id)  1
@@ -265,8 +243,6 @@ proc createNode { id } {
     $node($id) addToChannel  $channel    $phy($id)   1
 
 
-    $udp($id) node_id $id
-    
     #Set the IP address of the node
     #$ipif($id) addr "1.0.0.${id}"
     $ipif($id) addr [expr $id + 1]
@@ -294,14 +270,6 @@ proc createNode { id } {
     $phy($id) setSpectralMask $data_mask
     $phy($id) setInterference $interf_data($id)
     $phy($id) setInterferenceModel "MEANPOWER"
-
-    if {$opt(cumulative) == 1} {
-        $udp($id) setCumAckMode
-    } elseif {$opt(cumulative) == 0} {
-        $udp($id) setNoCumAckMode
-    } else {
-        $udp($id) setNoAckMode
-    }
 }
 
 #################
@@ -335,10 +303,9 @@ $mac(2) setGuardTime    0.2
 # Inter-node module connection #
 ################################
 proc connectNodes {id1 des1} {
-    global ipif ipr portnum cbr cbr_sink ipif_sink portnum_sink ipr_sink opt udp
+    global ipif ipr portnum cbr cbr_sink ipif_sink portnum_sink ipr_sink opt 
     $cbr($id1,$des1) set destAddr_ [$ipif($des1) addr]
     $cbr($id1,$des1) set destPort_ $portnum($des1,$id1)
-    $udp($id1) set_dest $portnum($id1,$des1) $portnum($des1,$id1)
 }
 
 ##################
@@ -395,7 +362,7 @@ for {set id1 0} {$id1 < $opt(nn)} {incr id1}  {
 
 for {set ii 0} {$ii < $opt(nn)} {incr ii} {
     $ns at $opt(starttime)    "$mac($ii) start"
-    $ns at [expr $opt(stoptime) + $opt(extratime)]     "$mac($ii) stop"
+    $ns at $opt(stoptime)     "$mac($ii) stop"
 }
 ###################
 # Final Procedure #
@@ -462,30 +429,6 @@ proc finish {} {
         puts "Packets in buffer        : $sum_pcks_in_buffer"
         puts "Packet Delivery Ratio    : [format %.4f [expr $sum_recv_pkts / $sum_sent_pkts * 100]]"
     }
-
-    set sum_cbr_throughput     0
-    set sum_per                0
-    set sum_cbr_sent_pkts      0.0
-    set sum_cbr_rcv_pkts       0.0    
-
-    for {set i 0} {$i < $opt(nn)} {incr i}  {
-        for {set j 0} {$j < $opt(nn)} {incr j} {
-            if {$i == $j} {continue}
-            set cbr_throughput           [$cbr($i,$j) getthr]
-            set cbr_sent_pkts        [$cbr($j,$i) getsentpkts]
-            set cbr_rcv_pkts           [$cbr($i,$j) getrecvpkts]
-            
-            puts "cbr($i,$j) throughput                    : $cbr_throughput"
-            puts "cbr($i,$j) recv pkts                     : $cbr_rcv_pkts"
-            puts "cbr($j,$i) sent pkts                     : $cbr_sent_pkts"
-
-            set sum_cbr_throughput [expr $sum_cbr_throughput + $cbr_throughput]
-            set sum_cbr_sent_pkts  [expr $sum_cbr_sent_pkts + $cbr_sent_pkts]
-            set sum_cbr_rcv_pkts   [expr $sum_cbr_rcv_pkts + $cbr_rcv_pkts]
-        }
-
-        puts "Lost packets uwtp($i):                  : [$udp($i) getLostPcks]"
-    }
     
     $ns flush-trace
     close $opt(tracefile)
@@ -500,6 +443,6 @@ if ($opt(verbose)) {
 }
 
 
-$ns at [expr $opt(stoptime) + $opt(extratime)]  "finish; $ns halt" 
+$ns at [expr $opt(stoptime) + 50.0]  "finish; $ns halt" 
 
 $ns run

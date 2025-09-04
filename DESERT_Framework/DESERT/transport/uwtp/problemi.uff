@@ -29,6 +29,7 @@ PROBLEMI:
 
 --- aggiunto il sistema che limita il numero di ritrasmissioni di un nack
 --- aggiunto il sistema che invia un ack ogni tot pacchetti non nackati consecutivi
+--- aggiunto il sistema che ritrasmette automaticamente i pacchetti se non viene ricevuto nessun ack per troppo tempo
 
 
 - nuova idea per il confronto: taglia degli ack cumulativi vs dimensione del buffer
@@ -59,4 +60,9 @@ idea: mostrare nel paper il fatto che il protocollo e' molto versatile e riesce 
 
 
 massive flaw: se i primi x pacchetti vengono persi: suca, perche' viene messo come sequence number iniziale il number
-del primo pacchetto che viene ricevuto
+del primo pacchetto che viene ricevuto (fixed)
+
+Ogni modulo UWTP puo inviare solo ad una porta di destinazione (wtf) proprio non e' minimamente stato pensato che si potesse fare
+assurdo, sono flaggerblastato (fixed)
+
+fun fact: il protocollo fa schifo se usato con TDMA? idk

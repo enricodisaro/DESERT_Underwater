@@ -85,7 +85,8 @@ UWTP::UWTP()
 	, delay_timer_(this)
 	, resend_timer_(this)
 	, ack_mode(WITH_ACK)
-//	, seq_no_counter(-1)
+	, destPort_(0)
+	, seq_no_counter(-1)
 	, ack_tx_mode(WITHOUT_CUM_ACK)
 	, lost_pck_count(0)
 {
@@ -96,7 +97,7 @@ UWTP::UWTP()
 	bind("send_buffer_size_", (int *) &send_buffer_size);
 	bind("receive_buffer_size_", (int *) &receive_buffer_size);
 	bind("delay_interval_", (double *) &delay_interval);
-	//bind("destPort_", (int *) &destPort_);
+	bind("destPort_", (int *) &destPort_);
 	bind("nack_retx_time_", (double *) &nack_retx_time);
 	bind("pkt_delete_time_from_queue_", (double *) &pkt_delete_time_from_queue);
 	bind("expected_ACK_threshold_", (double *) &expected_ACK_threshold);
@@ -159,10 +160,7 @@ UWTP::command(int argc, const char *const *argv)
 			Module *m = dynamic_cast<Module *>(tcl.lookup(argv[2]));
 			if (!m)
 				return TCL_ERROR;
-			
-			if(debug_) cout << "calling the method" << endl;
 			int port = assignPort(m);
-			if(debug_) cout << "the port is " << port << endl;
 			tcl.resultf("%d", port);
 
 			//init the map for ack transmission
@@ -172,26 +170,6 @@ UWTP::command(int argc, const char *const *argv)
 			return TCL_OK;
 		} else if (strcasecmp(argv[1], "node_id") == 0) {
 			node_id_ = atoi(argv[2]);
-			return TCL_OK;
-		} 
-	}
-
-	if (argc == 4) {
-		if (strcasecmp(argv[1], "set_dest") == 0) {
-			/**
-			 * the parameters for this command are the source port on this device and the destination port on the 
-			 * receiver. This is likely scuffed and not optimal but I couldn't find a better approach for now
-			 * and it's for sure better than before (UWTP could only send to 1 single receiver)
-			 */
-
-			int sport = atoi(argv[2]);
-			dest_ports[sport] = atoi(argv[3]);
-
-			if(id_map.find(sport) == id_map.end()) return TCL_ERROR;
-
-			SN_map[sport] = 0;	//add the entry to the map
-
-			if(debug_) cout << "PARLA nodo: " << getNodeId() << ", id:" << getId() << ";\nthe destination port for sport =" << sport << " is now set to " << dest_ports[sport] << endl;
 			return TCL_OK;
 		}
 	}
@@ -207,14 +185,14 @@ UWTP::recv(Packet *p)
 }
 
 void
-UWTP::initPkt(Packet *p, int id)
+UWTP::initPkt(Packet *p, int id, int seq_no_counter)
 {
 
 	//create the packet header
 	struct hdr_cmn *cmh = HDR_CMN(p);
 	struct hdr_uwtp_data *uwtpdh = HDR_UWTP_DATA(p);
 
-
+	if (debug_) cout << "chiamata a initPkt, seqNum = " << seq_no_counter << endl;
 		//cout << TIME << " UWTP::initPkt(" << node_id
 		//	 << "), initializing data packet " << endl;
 
@@ -227,36 +205,23 @@ UWTP::initPkt(Packet *p, int id)
 				id);
 		Packet::free(p);
 	}
-	
 
 	int sport = iter->second;
 	assert(sport > 0 && sport <= portcounter);
 
-	if (dest_ports.find(sport) == dest_ports.end()) {
-		cout << "NON ESISTE UNA DEST PORT PER QUESTO port:" << sport << endl;
-	}
-	if (SN_map.find(sport) == SN_map.end()) {
-		cout << "NON ESISTE UN SN PER QUESTO port:" << sport << endl;
-	}
-
-
-	int seq_no = SN_map[sport]++;
-
-	if (debug_) cout << "chiamata a initPkt, seqNum = " << seq_no << endl;
-
 	//setup the packet fields
 	cmh->direction() = hdr_cmn::DOWN;
 	uwtpdh->type_ = UWTP_DATA;
-	cmh->uid() = seq_no;  //uses the uid to store the sequence number
+	cmh->uid() = seq_no_counter;  //uses the uid to store the sequence number
 	uwtpdh->sport_ = sport;
-	uwtpdh->dport_ = dest_ports[sport];
+	uwtpdh->dport_ = destPort_;
 	cmh->size() += uwtpdh->size();
 	if (debug_) {
-		cout << "INVIO: da " << getNodeId() << ", SN = " << cmh->uid() << endl;
+		cout << "INVIO: da " << getId() << ", SN = " << cmh->uid() << endl;
 	//	cout << "Packet type " << uwtpdh->type_ << endl;
 	//	cout << "Seq no " << cmh->uid() << endl;
-		cout << "Source port " << uwtpdh->sport_ << endl;
-		cout << "Destination port " << uwtpdh->dport_ << endl;
+	//	cout << "Source port " << uwtpdh->sport_ << endl;
+	//	cout << "Destination port " << uwtpdh->dport_ << endl;
 	//	cout << "\n" << endl;
 	}
 }
@@ -335,7 +300,7 @@ void
 UWTP::sendNack()
 {
 
-	if (debug_) cout << "\n\n===========================\n" << TIME << " PARLA " << getNodeId() <<"   -------- sendNACK ---------" << endl;
+	if (debug_) cout << "\n\n===========================\n" << TIME << "   -------- sendNACK ---------" << endl;
 		//cout << TIME << " UWTP::sendNack(" << node_id << "), sending Nack "
 		//	 << endl;
 
@@ -464,7 +429,7 @@ UWTP::sendNack()
 void
 UWTP::resendPkt()
 {
-	if(debug_) cout << "\n\n--------------------\nRESEND was called by " << getNodeId() << endl;
+	if(debug_) cout << "\n\n--------------------\nRESEND was called by " << getId() << endl;
 
 	if(sendBuffer.size() > 0) {		//if there is something in the send buffer
 		map<UWTPPair, UWTPPktStoreInfo *>::iterator it_p = sendBuffer.end();		//get the last item in the send buffer
@@ -472,7 +437,6 @@ UWTP::resendPkt()
 		if(it_p->second->getTimeSpentInQueue() >= resend_time) {	//if the packet is old enough
 			Packet *data_pkt = (it_p->second->getPktPnt())->copy();
 			sendDown(data_pkt);										//send it again with no solicitation
-			if(debug_) cout << "port: " << it_p->first.first << ", SN: " << it_p->first.second << endl;
 		}
 
 		resend_timer_.resched(resend_time);		//reschedule this
@@ -617,14 +581,14 @@ UWTP::recvData(Packet *p, int id)
 	int seq_no = cmh->uid();
 
 
-	if (debug_) cout << "size of receive queue is: " << receiveBuffer.size() << endl;
+	if (debug_) cout << "size of receive queue for " << dport_no << " is: " << receiveBuffer.size() << endl;
 
 	if (debug_) {
-		cout << "RICEVO: da " << sport_no << ", SN = " << seq_no << endl;
+		cout << "RICEVO: da " << dport_no - 1 << ", SN = " << seq_no << endl;
 	//	cout << "Packet type " << uwtpdh->type_ << endl;
 	//	cout << "SEQ NUM " << seq_no << endl;
 	//	cout << "Source port " << sport_no << endl;
-		cout << "Destination port " << dport_no << endl;
+	//	cout << "Destination port " << dport_no << endl;
 	}
 
 	checkNack(dport_no, seq_no);	//check if there is a nack for this packet
@@ -686,7 +650,7 @@ UWTP::recvData(Packet *p, int id)
 				expPktInfo.find(dport_no); 		//find the next sequence number
 		Packet *rcvPkt = p->copy();
 		hdr_uwtp_data *udh = HDR_UWTP_DATA(rcvPkt);
-		initAckPkt(rcvPkt, ack_pkt, (seq_no));
+		initAckPkt(rcvPkt, ack_pkt, (it_e->second) - 1);
 		if (debug_) cout << "sending an ack" << endl;
 		sendAck(ack_pkt);						//send the cumulative ACK
 
@@ -753,7 +717,6 @@ UWTP::recvData(Packet *p, int id)
 				nack_store_info->setSenderId(id);
 				nackBuffer.insert(
 						make_pair(make_pair(dport_no, i), nack_store_info));
-						
 			}
 		}//end of for
 
@@ -803,7 +766,7 @@ UWTP::recvData(Packet *p, int id)
 	//}//end of "if we already know the expected sequence number"
 
 
-	/*if (sendBuffer.size() > 0) {	//if we have something to send
+	if (sendBuffer.size() > 0) {	//if we have something to send
 		for (map<UWTPPair, UWTPPktStoreInfo *>::iterator it_p =
 						sendBuffer.begin();
 				it_p != sendBuffer.end();
@@ -813,7 +776,7 @@ UWTP::recvData(Packet *p, int id)
 				sendBuffer.erase(it_p->first);
 			}
 		}
-	}*/
+	}
 }
 
 
@@ -832,11 +795,11 @@ UWTP::recvAck(Packet *p)
 	if (ack_tx_mode == WITHOUT_CUM_ACK) {	//if using per-packet ACKs
 
 		map<UWTPPair, UWTPPktStoreInfo *>::iterator it_p = sendBuffer.find(
-				make_pair(uwtpah->getDport(), uwtpah->getSeqNo()));	//look for the packet relative to the ACK
+				make_pair(uwtpah->getSport(), uwtpah->getSeqNo()));	//look for the packet relative to the ACK
 
 		
 		if (it_p != sendBuffer.end()) {		//if it exists
-			sendBuffer.erase(it_p);	//remove it from the buffer
+			sendBuffer.erase(it_p->first);	//remove it from the buffer
 		} else {
 			cout << TIME << " A wrong packet is received" << endl;
 		}
@@ -844,12 +807,13 @@ UWTP::recvAck(Packet *p)
 
 	} else if (ack_tx_mode == WITH_CUM_ACK) {	//if using cumulative ACKs
 		int count = 0;
+		int p = 0;
 		for (map<UWTPPair, UWTPPktStoreInfo *>::iterator it_p =
 						sendBuffer.begin();
 				it_p != sendBuffer.end();
 				/*nothing here*/) {		//iterate over the send buffer
 			//cout << count << endl;
-			if ((uint)(it_p->first).first == (uint) uwtpah->getDport() &&
+			if ((uint)(it_p->first).first == (uint) uwtpah->getSport() &&
 					(uint) (it_p->first).second <= (uint) uwtpah->getSeqNo()) {	//if the packet is in the ACKed range
 				count++;
 				//it_p = sendBuffer.erase(it_p->first);		//remove it from the buffer 
@@ -888,18 +852,17 @@ UWTP::recvNack(Packet *p)
 	hdr_uwtp_nack *uwtpnah = HDR_UWTP_NACK(p);
 	if(debug_) cout << uwtpnah->getSeqNo() << endl;
 
-	if(debug_) cout << uwtpnah->getDport() << ", " << uwtpnah->getSeqNo() << endl;
+	if(debug_) cout << uwtpnah->getSport() << ", " << uwtpnah->getSeqNo() << endl;
 	if(debug_) cout << "sendbuffer size is " << sendBuffer.size() << endl;
 	if(debug_) for (map<UWTPPair, UWTPPktStoreInfo *>::iterator it_p =
 									sendBuffer.begin();
 							it_p != sendBuffer.end();
 							it_p++){
-								cout << "Port: " << it_p->first.first << ", SN:";
 								cout << it_p->first.second << endl;
 							}
 
 	map<UWTPPair, UWTPPktStoreInfo *>::iterator it_p = sendBuffer.find(
-			make_pair(uwtpnah->getDport(), uwtpnah->getSeqNo()));		//find the NACKed packet in the buffer
+			make_pair(uwtpnah->getSport(), uwtpnah->getSeqNo()));		//find the NACKed packet in the buffer
 
 	if (it_p == sendBuffer.end()) { //2222
 		if(debug_) cout << "The packet cant be retxed because it's not in the buffer anymore. Abort" << endl;
@@ -927,7 +890,7 @@ UWTP::recvNack(Packet *p)
 					sendBuffer.begin();
 			it_p != sendBuffer.end();
 			/*nothing here*/) {		//iterate over the send buffer
-		if ((uint)(it_p->first).first == (uint) uwtpnah->getDport() &&
+		if ((uint)(it_p->first).first == (uint) uwtpnah->getSport() &&
 				(uint) (it_p->first).second < (uint) uwtpnah->getSeqNo()) {	//if the packet is in the ACKed range
 			count++;
 			map<UWTPPair, UWTPPktStoreInfo*>::iterator toErase = it_p;
@@ -951,7 +914,7 @@ UWTP::recv(Packet *p, int idSrc)
 	hdr_cmn *ch = HDR_CMN(p);
 
 	if (debug_){
-		cout << "\n\n\n==================================================\nPARLA " << getNodeId() << endl;
+		cout << "\n\n\n==================================================\nPARLA " << getId() << endl;
 		if(ch->direction() == hdr_cmn::UP) cout << "packet UP" << endl;
 		else cout << "packet DOWN" << endl;
 		//cout << TIME << " UWTP::recv(" << node_id
@@ -971,11 +934,9 @@ UWTP::recv(Packet *p, int idSrc)
 			struct hdr_uwtp_data *uwtpdh = HDR_UWTP_DATA(p);
 
 			map<int, int>::const_iterator iter =
-					id_map.find(uwtpdh->getDport());	//find the id of the sender
+					id_map.find(uwtpdh->getDport());	//find the port number
 
 			if (iter == id_map.end()) {
-
-				cout << "the port is: " << uwtpdh->getDport() << endl;
 				// Unknown Port Number
 				cout << TIME
 					 << "UWtrans::recv() (dir:UP), receive a packet with "
@@ -1013,7 +974,7 @@ UWTP::recv(Packet *p, int idSrc)
 			struct hdr_uwtp_data *uwtpdh = HDR_UWTP_DATA(p);
 
 			map<UWTPPair, UWTPPktStoreInfo *>::iterator it_p =
-					sendBuffer.find(make_pair(uwtpdh->getSport(), ch->uid())); //check if that seq num is already in the buffer
+					sendBuffer.find(make_pair(uwtpdh->getDport(), ch->uid())); //check if that seq num is already in the buffer
 
 			if (it_p != sendBuffer.end()) {	//if already in the buffer
 				if (debug_)
@@ -1022,7 +983,8 @@ UWTP::recv(Packet *p, int idSrc)
 						 << endl;
 			} else {		//if not in the buffer
 				// its a new packet for the destination
-				initPkt(p, idSrc);
+				++seq_no_counter;
+				initPkt(p, idSrc, seq_no_counter);
 				if(debug_) cout << "A PACKET IS BEING SENT; SOURCE is " << idSrc << "\nSENDBUFFER SIZE = " << sendBuffer.size() << endl;
 				if(debug_) cout << "spazio totale " << send_buffer_size << endl;
 
@@ -1034,7 +996,7 @@ UWTP::recv(Packet *p, int idSrc)
 					pkt_store_info->setPktTxInfo(FALSE);
 
 					sendBuffer.insert(		//just add the packet to the buffer
-							make_pair(make_pair(uwtpdh->getSport(), ch->uid()),
+							make_pair(make_pair(uwtpdh->getDport(), ch->uid()),
 									pkt_store_info));
 					if (debug_) {
 						cout << "Content of sendBuffer:" << endl;
@@ -1086,7 +1048,7 @@ UWTP::recv(Packet *p, int idSrc)
 					pkt_store_info->setPktPnt(p);
 					pkt_store_info->setPktTxInfo(FALSE);
 					sendBuffer.insert(							//add the new packet
-							make_pair(make_pair(uwtpdh->getSport(), ch->uid()),
+							make_pair(make_pair(uwtpdh->getDport(), ch->uid()),
 									pkt_store_info));
 				}
 
