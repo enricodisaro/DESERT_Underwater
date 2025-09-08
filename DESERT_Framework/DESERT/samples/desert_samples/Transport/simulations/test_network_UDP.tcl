@@ -110,7 +110,7 @@ $ns use-Miracle
 ##################
 set opt(nn)                 3.0 ;# Number of Nodes
 set opt(starttime)          1
-set opt(stoptime)           10000
+set opt(stoptime)           100000
 set opt(txduration)         [expr $opt(stoptime) - $opt(starttime)]
 
 set opt(maxinterval_)       20.0
@@ -119,32 +119,23 @@ set opt(bw)                 5000.0
 set opt(bitrate)            4800.0
 set opt(ack_mode)           "setNoAckMode"
 
-set opt(txpower)            145.0 
+set opt(txpower)            150.0 
 set opt(propagation_speed)  1500;# m/s
 set opt(rngstream)	        1
 set opt(pktsize)            125
-set opt(cbr_period)         5
+set opt(cbr_period)         4
 
-set opt(cumulative)         1;           #are packets acked cumulatively 0=no 1=yes 2=no acks
-set opt(cum_ACK_param)      10;           #how many packets are acked cumulatively
 
 if {$opt(bash_parameters)} {
 
-    if {$argc == 4} {
-        set opt(cumulative) [lindex $argv 0]
-        set opt(stoptime) [lindex $argv 1]
+    if {$argc == 3} {
+        set opt(stoptime) [lindex $argv 0]
         set opt(txduration)         [expr $opt(stoptime) - $opt(starttime)]
-        set opt(cbr_period) [lindex $argv 2]
-        set opt(cum_ACK_param) [lindex $argv 3]
+        set opt(cbr_period) [lindex $argv 1]
+        set opt(rngstream) [lindex $argv 2]
 
-    } elseif {$argc != 4} {
-        puts "The script requires three inputs:"
-        puts "- the first one is the cbr packet size (byte);"
-        puts "- the second one is the cbr poisson period (seconds);"
-        puts "- the third one is the random generator substream;"
-        puts "- the fourth one is the number of nodes;"
-        puts "example: ns uwcbr.tcl 125 60 13 2"
-        puts "Please try again."
+    } elseif {$argc != 3} {
+        puts "duration cbr_period RNG_seed"
         return
     } else {
         set opt(pktsize)       [lindex $argv 0]
@@ -186,16 +177,6 @@ Module/UW/CBR set period_              $opt(cbr_period)
 Module/UW/CBR set PoissonTraffic_      1
 Module/UW/CBR set debug_      0
 
-Module/UW/TP set debug_      1
-Module/UW/TP set send_buffer_size_      3000
-Module/UW/TP set receive_buffer_size_	 5000
-Module/UW/TP set delay_interval_	 2
-Module/UW/TP set nack_retx_time_	 4
-Module/UW/TP set pkt_delete_time_from_queue_	 1000
-Module/UW/TP set expected_ACK_threshold_ 0.5
-Module/UW/TP set cum_ACK_param_         $opt(cum_ACK_param)
-Module/UW/TP set nack_retx_limit_   100;          #max number of times a nack can be retransmitted
-Module/UW/TP set resend_time_       10;           #time to pass before automatic retransmission
 
 ### Channel ###
 MPropagation/Underwater set practicalSpreading_ 1.75
@@ -243,8 +224,8 @@ proc createNode { id } {
 		set cbr($id,$cnt)  [new Module/UW/CBR] 
 	}
 
-    set udp($id)  [new Module/UW/TP]
-    #set udp($id)  [new Module/UW/UDP]
+    #set udp($id)  [new Module/UW/TP]
+    set udp($id)  [new Module/UW/UDP]
     set ipr($id)  [new Module/UW/StaticRouting]
     set ipif($id) [new Module/UW/IP]
     set mll($id)  [new Module/UW/MLL] 
@@ -256,7 +237,7 @@ proc createNode { id } {
         $node($id) addModule 7 $cbr($id,$cnt)   1  "CBR"
     }
 
-    $node($id) addModule 6 $udp($id)   0  "UWTP"
+    $node($id) addModule 6 $udp($id)   0  "UDP"
     $node($id) addModule 5 $ipr($id)   0  "IPR"
     $node($id) addModule 4 $ipif($id)  0  "IPF"   
     $node($id) addModule 3 $mll($id)   0  "MLL"
@@ -279,7 +260,7 @@ proc createNode { id } {
     $node($id) addToChannel  $channel    $phy($id)   0
 
 
-	$udp($id) node_id $id
+	#$udp($id) node_id $id
 	#$udp($id) setNoAckMode
 
     $ipif($id) addr [expr $id + 1]
@@ -289,13 +270,7 @@ proc createNode { id } {
     
     set position($id) [new "Position"]
     $node($id) addPosition $position($id)
-    
-    #Setup positions
-    $position($id) setX_ [expr 120 * $id -180]
-    $position($id) setY_ [expr 120 * $id -180]
-    $position($id) setZ_ -1000
 
-	puts "Position($id) ([$position($id) getX_], [$position($id) getY_], [$position($id) getZ_])"
 
     #Interference model
     set interf_data($id)  [new "Module/UW/INTERFERENCE"]
@@ -308,15 +283,7 @@ proc createNode { id } {
     $phy($id) setSpectralMask $data_mask
     $phy($id) setInterference $interf_data($id)
     $phy($id) setInterferenceModel "MEANPOWER"
-    
 
-    if {$opt(cumulative) == 1} {
-        $udp($id) setCumAckMode
-    } elseif {$opt(cumulative) == 0} {
-        $udp($id) setNoCumAckMode
-    } else {
-        $udp($id) setNoAckMode
-    }
     
 }
 
@@ -355,7 +322,6 @@ proc connectNodes {id1 des1} {
     global ipif ipr portnum cbr cbr_sink ipif_sink portnum_sink ipr_sink opt udp
     $cbr($id1,$des1) set destAddr_ [$ipif($des1) addr]
     $cbr($id1,$des1) set destPort_ $portnum($des1,$id1)
-    $udp($id1) set_dest $portnum($id1,$des1) $portnum($des1,$id1)
 }
 
 # Setup flows
@@ -420,8 +386,6 @@ proc finish {} {
     puts "tx frequency     : $opt(freq) Hz"
     puts "tx bandwidth     : $opt(bw) Hz"
     puts "bitrate          : $opt(bitrate) bps"
-    puts "cumulative ACKS  : $opt(cumulative)"
-    puts "cumulative param : $opt(cum_ACK_param)"
     puts "---------------------------------------------------------------------"
 
     set sum_cbr_throughput     0
@@ -429,10 +393,11 @@ proc finish {} {
     set sum_cbr_sent_pkts      0.0
     set sum_cbr_rcv_pkts       0.0    
 
-        set sum_cbr_throughput     0
+    set sum_cbr_throughput     0
     set sum_per                0
     set sum_cbr_sent_pkts      0.0
     set sum_cbr_rcv_pkts       0.0    
+    set sum_delays 0
 
     for {set i 0} {$i < $opt(nn)} {incr i}  {
         for {set j 0} {$j < $opt(nn)} {incr j} {
@@ -448,9 +413,11 @@ proc finish {} {
             set sum_cbr_throughput [expr $sum_cbr_throughput + $cbr_throughput]
             set sum_cbr_sent_pkts  [expr $sum_cbr_sent_pkts + $cbr_sent_pkts]
             set sum_cbr_rcv_pkts   [expr $sum_cbr_rcv_pkts + $cbr_rcv_pkts]
+            set delay [$cbr($i,$j) getDelay]
+            set delay [expr $delay - $opt(txduration)]
+            set sum_delays         [expr $sum_delays + $delay]
         }
 
-        puts "Lost packets uwtp($i):                  : [$udp($i) getLostPcks]"
     }
         
     #set ipheadersize        [$ipif(1) getipheadersize]
@@ -464,14 +431,37 @@ proc finish {} {
     puts "Packet Delivery Ratio    : [expr $sum_cbr_rcv_pkts / $sum_cbr_sent_pkts * 100]"
     # puts "IP Pkt Header Size       : $ipheadersize"
     #puts "UDP Header Size          : $udpheadersize"
-	for {set i 0} {$i < $opt(nn)} {incr i} {
-		puts "UWTP($i) RX ACK Count         : [$udp($i) getAckRxCount]"
-    	puts "UWTP($i) RX NACK Count        : [$udp($i) getNackRxCount]"
-	}
+
     #puts "CBR Header Size          : $cbrheadersize"
     puts "---"
-    puts "[expr $sum_cbr_rcv_pkts / $sum_cbr_sent_pkts * 100], $opt(cbr_period), $opt(cumulative), $opt(cum_ACK_param)"
   
+
+    puts "\n\n============================="
+    puts "network UDP"
+    puts "PDR: [expr $sum_cbr_rcv_pkts / $sum_cbr_sent_pkts * 100]"
+    set cbrs_num [expr $opt(nn) * ($opt(nn) - 1)]
+    puts "mean throughput: [expr $sum_cbr_throughput / $cbrs_num]"
+    puts "mean delay: [expr $sum_delays / $cbrs_num]"
+    puts "duration: $opt(txduration)"
+    puts "power: $opt(txpower)"
+    puts "period: $opt(cbr_period)"
+
+
+
+    set outfile1 [open "data_network_UDP.out" a]        
+    puts $outfile1 "\n"
+    puts $outfile1 "UWTP"
+    puts $outfile1 "PDR: [expr $sum_cbr_rcv_pkts / $sum_cbr_sent_pkts * 100]"
+    set cbrs_num $opt(nn)
+    puts $outfile1 "mean throughput: [expr $sum_cbr_throughput / $cbrs_num]"
+    puts $outfile1 "mean delay: [expr $sum_delays / $cbrs_num]"
+    puts $outfile1 "duration: $opt(txduration)"
+    puts $outfile1 "power: $opt(txpower)"
+    puts $outfile1 "period: $opt(cbr_period)"
+    close $outfile1
+
+
+
     $ns flush-trace
     close $opt(tracefile)
 }

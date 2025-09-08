@@ -56,7 +56,7 @@ il file di simulazione tdma e utile perche invece che mettere un sink ha nodi ch
 
 cosa che ho notato: in caso di buffer limitato con canale bad, e' molto meglio l'approccio per packet perche libera il buffer e permette piu ritrasmissioni
 idea: mostrare nel paper il fatto che il protocollo e' molto versatile e riesce quindi a funzionare in molti contesti
-
+fun fact: la cosa qua sopra non e' vera, e' solo che il codice non funzionava nel modo giusto, ovviamente
 
 
 massive flaw: se i primi x pacchetti vengono persi: suca, perche' viene messo come sequence number iniziale il number
@@ -66,3 +66,10 @@ Ogni modulo UWTP puo inviare solo ad una porta di destinazione (wtf) proprio non
 assurdo, sono flaggerblastato (fixed)
 
 fun fact: il protocollo fa schifo se usato con TDMA? idk
+
+tanto per cambiare, nemmeno il receive buffer funzionava (fixed)
+
+
+limitazioni del protocollo di cui parlare:
+parte dal presupposto che i SN partano da 0
+la connessione deve essere effettuata manualmente: non c'e un handshake ma deve essere tutto setuppato esternamente

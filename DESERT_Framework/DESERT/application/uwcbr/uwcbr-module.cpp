@@ -209,6 +209,9 @@ UwCbrModule::command(int argc, const char *const *argv)
 		} else if (strcasecmp(argv[1], "printidspkts") == 0) {
 			this->printIdsPkts();
 			return TCL_OK;
+		} else if (strcasecmp(argv[1], "getDelay") == 0) {
+			tcl.resultf("%f", sumdt);
+			return TCL_OK;
 		}
 	} else if (argc == 3) {
 		if (strcasecmp(argv[1], "setLogSuffix") == 0) {

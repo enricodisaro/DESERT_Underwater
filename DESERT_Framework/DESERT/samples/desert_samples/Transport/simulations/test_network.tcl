@@ -108,9 +108,10 @@ $ns use-Miracle
 ##################
 # Tcl variables  #
 ##################
-set opt(nn)                 4.0 ;# Number of Nodes
+set opt(nn)                 3.0 ;# Number of Nodes
 set opt(starttime)          1
-set opt(stoptime)           10000
+set opt(stoptime)           1000
+set opt(extratime)          10000
 set opt(txduration)         [expr $opt(stoptime) - $opt(starttime)]
 
 set opt(maxinterval_)       20.0
@@ -121,30 +122,33 @@ set opt(ack_mode)           "setNoAckMode"
 
 set opt(txpower)            150.0 
 set opt(propagation_speed)  1500;# m/s
-set opt(rngstream)	        1
+set opt(rngstream)	        12
 set opt(pktsize)            125
-set opt(cbr_period)         5
+set opt(cbr_period)         10
 
 set opt(cumulative)         1;           #are packets acked cumulatively 0=no 1=yes 2=no acks
 set opt(cum_ACK_param)      10;           #how many packets are acked cumulatively
+set opt(nack_max_rtx)       4
+set opt(nack_rtx_period)    6
+set opt(send_buffer)        300
+set opt(receive_buffer)     300
 
 if {$opt(bash_parameters)} {
 
-    if {$argc == 4} {
+    if {$argc == 9} {
         set opt(cumulative) [lindex $argv 0]
         set opt(stoptime) [lindex $argv 1]
         set opt(txduration)         [expr $opt(stoptime) - $opt(starttime)]
         set opt(cbr_period) [lindex $argv 2]
         set opt(cum_ACK_param) [lindex $argv 3]
+        set opt(nack_max_rtx) [lindex $argv 4]
+        set opt(nack_rtx_period) [lindex $argv 5]
+        set opt(send_buffer) [lindex $argv 6]
+        set opt(receive_buffer) [lindex $argv 7]
+        set opt(rngstream) [lindex $argv 8]
 
-    } elseif {$argc != 4} {
-        puts "The script requires three inputs:"
-        puts "- the first one is the cbr packet size (byte);"
-        puts "- the second one is the cbr poisson period (seconds);"
-        puts "- the third one is the random generator substream;"
-        puts "- the fourth one is the number of nodes;"
-        puts "example: ns uwcbr.tcl 125 60 13 2"
-        puts "Please try again."
+    } elseif {$argc != 9} {
+        puts "cumulative duration cbr_period cum_ACK_param NACK_max_retx NACK_retx_period sendbuffer receivebuffer RNGstream"
         return
     } else {
         set opt(pktsize)       [lindex $argv 0]
@@ -186,15 +190,15 @@ Module/UW/CBR set period_              $opt(cbr_period)
 Module/UW/CBR set PoissonTraffic_      1
 Module/UW/CBR set debug_      0
 
-Module/UW/TP set debug_      1
-Module/UW/TP set send_buffer_size_      3000
-Module/UW/TP set receive_buffer_size_	 5000
-Module/UW/TP set delay_interval_	 2
-Module/UW/TP set nack_retx_time_	 4
+Module/UW/TP set debug_      0
+Module/UW/TP set send_buffer_size_      $opt(send_buffer)
+Module/UW/TP set receive_buffer_size_	 $opt(receive_buffer)
+Module/UW/TP set delay_interval_	 1
+Module/UW/TP set nack_retx_time_	 $opt(nack_rtx_period)
 Module/UW/TP set pkt_delete_time_from_queue_	 1000
 Module/UW/TP set expected_ACK_threshold_ 0.5
 Module/UW/TP set cum_ACK_param_         $opt(cum_ACK_param)
-Module/UW/TP set nack_retx_limit_   100;          #max number of times a nack can be retransmitted
+Module/UW/TP set nack_retx_limit_   $opt(nack_max_rtx);          #max number of times a nack can be retransmitted
 Module/UW/TP set resend_time_       10;           #time to pass before automatic retransmission
 
 ### Channel ###
@@ -237,7 +241,12 @@ proc createNode { id } {
     
     set node($id) [$ns create-M_Node $opt(tracefile) $opt(cltracefile)] 
 
-    set cbr($id)  [new Module/UW/CBR] 
+    set node($id) [$ns create-M_Node $opt(tracefile) $opt(cltracefile)] 
+	for {set cnt 0} {$cnt < $opt(nn)} {incr cnt} {
+        if { $id == $cnt} { continue }
+		set cbr($id,$cnt)  [new Module/UW/CBR] 
+	}
+
     set udp($id)  [new Module/UW/TP]
     #set udp($id)  [new Module/UW/UDP]
     set ipr($id)  [new Module/UW/StaticRouting]
@@ -246,15 +255,24 @@ proc createNode { id } {
     set mac($id)  [new Module/UW/CSMA_ALOHA] 
     set phy($id)  [new Module/UW/PHYSICAL]
 
-    $node($id) addModule 7 $cbr($id)   0  "CBR"
-    $node($id) addModule 6 $udp($id)   0  "UDP"
+    for {set cnt 0} {$cnt < $opt(nn)} {incr cnt} {
+        if { $id == $cnt} { continue }
+        $node($id) addModule 7 $cbr($id,$cnt)   1  "CBR"
+    }
+
+    $node($id) addModule 6 $udp($id)   0  "UWTP"
     $node($id) addModule 5 $ipr($id)   0  "IPR"
     $node($id) addModule 4 $ipif($id)  0  "IPF"   
     $node($id) addModule 3 $mll($id)   0  "MLL"
     $node($id) addModule 2 $mac($id)   0  "MAC"
     $node($id) addModule 1 $phy($id)   0  "PHY"
 
-    $node($id) setConnection $cbr($id)   $udp($id)   0
+    for {set cnt 0} {$cnt < $opt(nn)} {incr cnt} {
+        if { $id == $cnt} { continue }
+        $node($id) setConnection $cbr($id,$cnt)   $udp($id)   0
+
+        set portnum($id,$cnt) [$udp($id) assignPort $cbr($id,$cnt)]
+    }
     $node($id) setConnection $udp($id)   $ipr($id)   0
     $node($id) setConnection $ipr($id)   $ipif($id)  0
     $node($id) setConnection $ipif($id)  $mll($id)   0
@@ -262,11 +280,6 @@ proc createNode { id } {
     $node($id) setConnection $mac($id)   $phy($id)   0
     $node($id) addToChannel  $channel    $phy($id)   0
 
-    set portnum($id) [$udp($id) assignPort $cbr($id) ]
-    if {$id > 254} {
-		puts "hostnum > 254!!! exiting"
-		exit
-    }
 
 	$udp($id) node_id $id
 	#$udp($id) setNoAckMode
@@ -280,11 +293,11 @@ proc createNode { id } {
     $node($id) addPosition $position($id)
     
     #Setup positions
-    $position($id) setX_ [expr 120 * $id -180]
-    $position($id) setY_ [expr 120 * $id -180]
-    $position($id) setZ_ -1000
+    #$position($id) setX_ [expr 120 * $id -180]
+    #$position($id) setY_ [expr 120 * $id -180]
+    #$position($id) setZ_ -1000
 
-	puts "Position($id) ([$position($id) getX_], [$position($id) getY_], [$position($id) getZ_])"
+	#puts "Position($id) ([$position($id) getX_], [$position($id) getY_], [$position($id) getZ_])"
 
     #Interference model
     set interf_data($id)  [new "Module/UW/INTERFERENCE"]
@@ -309,92 +322,7 @@ proc createNode { id } {
     
 }
 
-proc createSink { } {
 
-    global channel propagation smask data_mask ns cbr_sink position_sink node_sink udp_sink portnum_sink interf_data_sink
-    global phy_data_sink posdb_sink opt mll_sink mac_sink ipr_sink ipif_sink bpsk interf_sink
-
-    set node_sink [$ns create-M_Node $opt(tracefile) $opt(cltracefile)]
-
-    for {set cnt 0} {$cnt < $opt(nn)} {incr cnt} {
-        set cbr_sink($cnt)  [new Module/UW/CBR] 
-    }
-    set udp_sink       [new Module/UW/TP]
-    #set udp_sink       [new Module/UW/UDP]
-    set ipr_sink       [new Module/UW/StaticRouting]
-    set ipif_sink      [new Module/UW/IP]
-    set mll_sink       [new Module/UW/MLL] 
-    set mac_sink       [new Module/UW/CSMA_ALOHA]
-    set phy_data_sink  [new Module/UW/PHYSICAL] 
-
-    for { set cnt 0} {$cnt < $opt(nn)} {incr cnt} {
-        $node_sink addModule 7 $cbr_sink($cnt) 0 "CBR"
-    }
-    $node_sink addModule 6 $udp_sink       0 "UDP"
-    $node_sink addModule 5 $ipr_sink       0 "IPR"
-    $node_sink addModule 4 $ipif_sink      0 "IPF"   
-    $node_sink addModule 3 $mll_sink       0 "MLL"
-    $node_sink addModule 2 $mac_sink       0 "MAC"
-    $node_sink addModule 1 $phy_data_sink  0 "PHY"
-
-    for { set cnt 0} {$cnt < $opt(nn)} {incr cnt} {
-        $node_sink setConnection $cbr_sink($cnt)  $udp_sink      0   
-    }
-    $node_sink setConnection $udp_sink  $ipr_sink            0
-    $node_sink setConnection $ipr_sink  $ipif_sink           0
-    $node_sink setConnection $ipif_sink $mll_sink            0 
-    $node_sink setConnection $mll_sink  $mac_sink            0
-    $node_sink setConnection $mac_sink  $phy_data_sink       0
-    $node_sink addToChannel  $channel   $phy_data_sink       0
-
-    for { set cnt 0} {$cnt < $opt(nn)} {incr cnt} {
-        set portnum_sink($cnt) [$udp_sink assignPort $cbr_sink($cnt)]
-        if {$cnt > 252} {
-            puts "hostnum > 252!!! exiting"
-            exit
-        }    
-    }
-
-	$udp_sink node_id $opt(nn)
-	$udp_sink setAckMode
-
-    if {$opt(cumulative) == 1} {
-        $udp_sink setCumAckMode
-    } elseif {$opt(cumulative) == 0} {
-        $udp_sink setNoCumAckMode
-    } else {
-        $udp_sink setNoAckMode
-    }
-
-    $ipif_sink addr 254
-
-    $mac_sink $opt(ack_mode)
-    $mac_sink initialize
-
-    set position_sink [new "Position"]
-    $node_sink addPosition $position_sink
-    
-    #Setup positions
-	$position_sink setX_ 0
-	$position_sink setY_ 0
-	$position_sink setZ_ -1000
-	puts "Position_sink ([$position_sink getX_], [$position_sink getY_], [$position_sink getZ_])"
-
-    #Interference model
-    set interf_data_sink  [new "Module/UW/INTERFERENCE"]
-    $interf_data_sink set maxinterval_ $opt(maxinterval_)
-    $interf_data_sink set debug_       0
-
-    #Propagation model
-    $phy_data_sink setPropagation $propagation
-    
-    $phy_data_sink setSpectralMask $data_mask
-    $phy_data_sink setInterference $interf_data_sink
-    $phy_data_sink setInterferenceModel "MEANPOWER"
-    
-    $phy_data_sink setSpectralMask $data_mask
-    $phy_data_sink setInterference $interf_data_sink
-}
 
 #################
 # Node Creation #
@@ -402,43 +330,62 @@ proc createSink { } {
 # Create here all the nodes you want to network together
 for {set id 0} {$id < $opt(nn)} {incr id}  {
     createNode $id
+    puts "Node $id created"
 }
-createSink
+
+$position(0) setX_ 0
+$position(0) setY_ 0
+$position(0) setZ_ -1000
+puts "Position(0) ([$position(0) getX_], [$position(0) getY_], [$position(0) getZ_])"
+
+$position(1) setX_ 0
+$position(1) setY_ 100
+$position(1) setZ_ -1000
+puts "Position(1) ([$position(1) getX_], [$position(1) getY_], [$position(1) getZ_])"
+
+$position(2) setX_ 100
+$position(2) setY_ 00
+$position(2) setZ_ -1000
+puts "Position(2) ([$position(2) getX_], [$position(2) getY_], [$position(2) getZ_])"
+
+
 
 ################################
 # Inter-node module connection #
 ################################
-proc connectNodes {id1} {
-    global ipif ipr portnum cbr cbr_sink ipif_sink portnum_sink ipr_sink udp udp_sink
-
-    $cbr($id1) set destAddr_ [$ipif_sink addr]
-    $cbr($id1) set destPort_ $portnum_sink($id1)
-	$udp($id1) set_dest $portnum($id1) $portnum_sink($id1)
-	
-    $cbr_sink($id1) set destAddr_ [$ipif($id1) addr]
-    $cbr_sink($id1) set destPort_ $portnum($id1)
-	$udp_sink set_dest $portnum_sink($id1) $portnum($id1)
+proc connectNodes {id1 des1} {
+    global ipif ipr portnum cbr cbr_sink ipif_sink portnum_sink ipr_sink opt udp
+    $cbr($id1,$des1) set destAddr_ [$ipif($des1) addr]
+    $cbr($id1,$des1) set destPort_ $portnum($des1,$id1)
+    $udp($id1) set_dest $portnum($id1,$des1) $portnum($des1,$id1)
 }
 
 # Setup flows
 for {set id1 0} {$id1 < $opt(nn)} {incr id1}  {
-    connectNodes $id1
+    for {set id2 0} {$id2 < $opt(nn)} {incr id2}  {
+        if {$id1 != $id2} {
+	    connectNodes $id1 $id2
+        }
+    }
 }
 
 # Fill ARP tables
 for {set id1 0} {$id1 < $opt(nn)} {incr id1}  {
     for {set id2 0} {$id2 < $opt(nn)} {incr id2}  {
-      $mll($id1) addentry [$ipif($id2) addr] [$mac($id2) addr]
-    }   
-    $mll($id1) addentry [$ipif_sink addr] [ $mac_sink addr]
-    $mll_sink addentry [$ipif($id1) addr] [ $mac($id1) addr]
+	$mll($id1) addentry [$ipif($id2) addr] [$mac($id2) addr]
+    }
 }
+
 
 # Setup routing table
 for {set id1 0} {$id1 < $opt(nn)} {incr id1}  {
-    $ipr($id1) addRoute [$ipif_sink addr] [$ipif_sink addr]
-    $ipr_sink  addRoute [$ipif($id1) addr] [$ipif($id1) addr]
+    for {set id2 0} {$id2 < $opt(nn)} {incr id2}  {
+        if {$id1 != $id2} {
+            $ipr($id1) addRoute [$ipif($id2) addr] [$ipif($id2) addr]
+        }
+    }
 }
+
 
 #####################
 # Start/Stop Timers #
@@ -446,8 +393,12 @@ for {set id1 0} {$id1 < $opt(nn)} {incr id1}  {
 # Set here the timers to start and/or stop modules (optional)
 # e.g., 
 for {set id1 0} {$id1 < $opt(nn)} {incr id1}  {
-    $ns at $opt(starttime)    "$cbr($id1) start"
-    $ns at [expr $opt(stoptime)]     "$cbr($id1) stop"
+    for {set id2 0} {$id2 < $opt(nn)} {incr id2} {
+	if {$id1 != $id2} {
+	    $ns at $opt(starttime)    "$cbr($id1,$id2) start"
+	    $ns at $opt(stoptime)     "$cbr($id1,$id2) stop"
+	}
+    }
 }
 
 ###################
@@ -480,18 +431,32 @@ proc finish {} {
     set sum_cbr_sent_pkts      0.0
     set sum_cbr_rcv_pkts       0.0    
 
-    for {set i 0} {$i < $opt(nn)} {incr i}  {
-        set cbr_throughput           [$cbr_sink($i) getthr]
-        set cbr_sent_pkts        [$cbr($i) getsentpkts]
-        set cbr_rcv_pkts           [$cbr_sink($i) getrecvpkts]
-        
-        puts "cbr_sink($i) throughput                    : $cbr_throughput"
-        puts "cbr_sink($i) recv pkts                     : $cbr_rcv_pkts"
-        puts "cbr($i) sent pkts                          : $cbr_sent_pkts"
+    set sum_cbr_throughput     0
+    set sum_per                0
+    set sum_cbr_sent_pkts      0.0
+    set sum_cbr_rcv_pkts       0.0    
+    set sum_delays             0
 
-        set sum_cbr_throughput [expr $sum_cbr_throughput + $cbr_throughput]
-        set sum_cbr_sent_pkts  [expr $sum_cbr_sent_pkts + $cbr_sent_pkts]
-        set sum_cbr_rcv_pkts   [expr $sum_cbr_rcv_pkts + $cbr_rcv_pkts]
+    for {set i 0} {$i < $opt(nn)} {incr i}  {
+        for {set j 0} {$j < $opt(nn)} {incr j} {
+            if {$i == $j} {continue}
+            set cbr_throughput           [$cbr($i,$j) getthr]
+            set cbr_sent_pkts        [$cbr($j,$i) getsentpkts]
+            set cbr_rcv_pkts           [$cbr($i,$j) getrecvpkts]
+            
+            puts "cbr($i,$j) throughput                    : $cbr_throughput"
+            puts "cbr($i,$j) recv pkts                     : $cbr_rcv_pkts"
+            puts "cbr($j,$i) sent pkts                     : $cbr_sent_pkts"
+
+            set sum_cbr_throughput [expr $sum_cbr_throughput + $cbr_throughput]
+            set sum_cbr_sent_pkts  [expr $sum_cbr_sent_pkts + $cbr_sent_pkts]
+            set sum_cbr_rcv_pkts   [expr $sum_cbr_rcv_pkts + $cbr_rcv_pkts]
+            set delay [$cbr($i,$j) getDelay]
+            set delay [expr $delay - $opt(txduration)]
+            set sum_delays         [expr $sum_delays + $delay]
+        }
+
+        puts "Lost packets uwtp($i):                  : [$udp($i) getLostPcks]"
     }
         
     #set ipheadersize        [$ipif(1) getipheadersize]
@@ -505,17 +470,49 @@ proc finish {} {
     puts "Packet Delivery Ratio    : [expr $sum_cbr_rcv_pkts / $sum_cbr_sent_pkts * 100]"
     # puts "IP Pkt Header Size       : $ipheadersize"
     #puts "UDP Header Size          : $udpheadersize"
-    puts "UWTP SINK TX ACK Count         : [$udp_sink getAckTxCount]"
-    puts "UWTP SINK TX NACK Count        : [$udp_sink getNackTxCount]"
 	for {set i 0} {$i < $opt(nn)} {incr i} {
 		puts "UWTP($i) RX ACK Count         : [$udp($i) getAckRxCount]"
     	puts "UWTP($i) RX NACK Count        : [$udp($i) getNackRxCount]"
 	}
     #puts "CBR Header Size          : $cbrheadersize"
     puts "---"
-    puts "Lost packets:                  : [$udp_sink getLostPcks]"
     puts "[expr $sum_cbr_rcv_pkts / $sum_cbr_sent_pkts * 100], $opt(cbr_period), $opt(cumulative), $opt(cum_ACK_param)"
   
+
+    puts "\n\n============================="
+    puts "network UWTP"
+    puts "PDR: [expr $sum_cbr_rcv_pkts / $sum_cbr_sent_pkts * 100]"
+    set cbrs_num [expr $opt(nn) * ($opt(nn) - 1)]
+    puts "mean throughput: [expr $sum_cbr_throughput / $cbrs_num]"
+    puts "mean delay: [expr $sum_delays / $cbrs_num]"
+    puts "duration: $opt(txduration)"
+    puts "power: $opt(txpower)"
+    puts "period: $opt(cbr_period)"
+    puts "ack_parameter: $opt(cum_ACK_param)"
+    puts "nack_max_rtx: $opt(nack_max_rtx)"
+    puts "nack_rtx_period: $opt(nack_rtx_period)"
+    puts "send buffer: $opt(send_buffer)"
+    puts "receive buffer: $opt(receive_buffer)"
+
+
+    set outfile1 [open "data_network.out" a]        
+    puts $outfile1 "\n"
+    puts $outfile1 "UWTP"
+    puts $outfile1 "PDR: [expr $sum_cbr_rcv_pkts / $sum_cbr_sent_pkts * 100]"
+    puts $outfile1 "mean throughput: [expr $sum_cbr_throughput / $cbrs_num]"
+    puts $outfile1 "mean delay: [expr $sum_delays / $cbrs_num]"
+    puts $outfile1 "duration: $opt(txduration)"
+    puts $outfile1 "power: $opt(txpower)"
+    puts $outfile1 "period: $opt(cbr_period)"
+    puts $outfile1 "ack_parameter: $opt(cum_ACK_param)"
+    puts $outfile1 "nack_max_rtx: $opt(nack_max_rtx)"
+    puts $outfile1 "nack_rtx_period: $opt(nack_rtx_period)"
+    puts $outfile1 "send buffer: $opt(send_buffer)"
+    puts $outfile1 "receive buffer: $opt(receive_buffer)"
+    close $outfile1
+
+
+
     $ns flush-trace
     close $opt(tracefile)
 }
@@ -523,5 +520,5 @@ proc finish {} {
 ###################
 # start simulation
 ###################
-$ns at [expr $opt(stoptime) + 2000.0]  "finish; $ns halt" 
+$ns at [expr $opt(stoptime) + $opt(extratime)]  "finish; $ns halt" 
 $ns run

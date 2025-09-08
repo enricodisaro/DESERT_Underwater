@@ -335,7 +335,7 @@ void
 UWTP::sendNack()
 {
 
-	if (debug_) cout << "\n\n===========================\n" << TIME << " PARLA " << getNodeId() <<"   -------- sendNACK ---------" << endl;
+/*	if (debug_) cout << "\n\n===========================\n" << TIME << " PARLA " << getNodeId() <<"   -------- sendNACK ---------" << endl;
 		//cout << TIME << " UWTP::sendNack(" << node_id << "), sending Nack "
 		//	 << endl;
 
@@ -350,7 +350,7 @@ UWTP::sendNack()
 				 << it_nb->second->getNackTxInfo() << endl;
 		}
 	}
-
+*/
 
 	//before doing anything, clean nacks that cant be retxed
 	//need to make another cycle because I didnt wanna risk undefined behaviour in the previous one when removing iterators
@@ -379,6 +379,12 @@ UWTP::sendNack()
 		}
 		else{
 			++it_nb;
+		}
+
+		if(it_nb != nackBuffer.end() && it_nb->first.second < expPktInfo[(it_nb->first).first]) {	//if the SN of the nack is too low
+			map<UWTPPair, NackPktStoreInfo *>::iterator toErase = it_nb;
+			++it_nb;
+			nackBuffer.erase(toErase);
 		}
 	}
 
@@ -413,6 +419,8 @@ UWTP::sendNack()
 				Packet *nack_p = (it_nb->second->getNackPnt())->copy();
 				nack_tx_count++;
 				sendDown(nack_p);							//resend the packet
+				if (debug_) cout << "\n\n===========================\n" << TIME << " PARLA " << getNodeId() <<"   -------- sendNACK ---------" << endl;
+
 				if(debug_) cout << "sent port:" << (it_nb->first).first << ", SN:" << (it_nb->first).second << endl;
 
 			} else {
@@ -452,7 +460,7 @@ UWTP::sendNack()
 		*/
 
 		delay_timer_.resched(delay_interval);
-		if(debug_) cout << "there is stuff: reschedule" << endl;
+		//if(debug_) cout << "there is stuff: reschedule" << endl;
 	}
 	else {
 		if(debug_) cout << "nothing to send" << endl;
@@ -680,15 +688,16 @@ UWTP::recvData(Packet *p, int id)
 					"expected one \n\n\n"
 					<< endl;
 		
-
-		Packet *ack_pkt = Packet::alloc();		//create the ACK packet
-		map<PortNo, ExpectedPktSeqNo>::iterator it_e =
-				expPktInfo.find(dport_no); 		//find the next sequence number
-		Packet *rcvPkt = p->copy();
-		hdr_uwtp_data *udh = HDR_UWTP_DATA(rcvPkt);
-		initAckPkt(rcvPkt, ack_pkt, (seq_no));
-		if (debug_) cout << "sending an ack" << endl;
-		sendAck(ack_pkt);						//send the cumulative ACK
+		if(RNV < 0.3) { //this procedure is useful really to end the communication, so no need to send it always
+			Packet *ack_pkt = Packet::alloc();		//create the ACK packet
+			map<PortNo, ExpectedPktSeqNo>::iterator it_e =
+					expPktInfo.find(dport_no); 		//find the next sequence number
+			Packet *rcvPkt = p->copy();
+			hdr_uwtp_data *udh = HDR_UWTP_DATA(rcvPkt);
+			initAckPkt(rcvPkt, ack_pkt, (seq_no));
+			if (debug_) cout << "sending an ack" << endl;
+			sendAck(ack_pkt);						//send the cumulative ACK
+		}
 
 
 		drop(p, 1, "LTESN"); // Less than expected sequence number = drop the packet
@@ -763,23 +772,28 @@ UWTP::recvData(Packet *p, int id)
 		if (it_r == receiveBuffer.end()) {		//if we received it for the first time
 
 			if (receiveBuffer.size() >= receive_buffer_size) { //if the buffer is full
+				if(debug_) cout << "\n\nTHE RECEIVE BUFFER IS FULL\n\n" << endl;
 				int lowest_seq_no = MAX_PORT_NO;				//why use MAX_PORT_NO bah
 				for (map<UWTPPair, Packet *>::iterator it_rc =
 								receiveBuffer.begin();
-						it_r != receiveBuffer.end();
-						it_r++) {						//iterate over the receive buffer
+						it_rc != receiveBuffer.end();
+						++it_rc) {						//iterate over the receive buffer
 					if ((it_rc->first).first == dport_no &&
 							(it_rc->first).second < lowest_seq_no) {
 						lowest_seq_no = (it_rc->first).second;		//look for the lowest sequence number
 																	//for a packet for this port
 					}
 				}
-
+				if(debug_) cout << "we found dport:" << dport_no << ", SN:" << lowest_seq_no << endl;
 				map<UWTPPair, Packet *>::iterator it_r1 =
 						receiveBuffer.find(
 								make_pair(dport_no, lowest_seq_no));	//pick the packet with the found
 																		//lowest sequence number
 				if (it_r1 != receiveBuffer.end()) {						//if it exists, then
+					if(debug_) cout << "packet exists" << endl;
+
+					lost_pck_count = lost_pck_count - it_e->second + lowest_seq_no;
+
 					map<PortNo, ExpectedPktSeqNo>::iterator it_e =
 							expPktInfo.find(dport_no);			//find the expected sequence number for this port
 					it_e->second = lowest_seq_no;				//update it with the lowest we have available in the
